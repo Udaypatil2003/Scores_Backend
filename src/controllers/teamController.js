@@ -1,6 +1,8 @@
 const Team = require("../models/Team");
 const Player = require("../models/Player");
 const { uploadImage } = require("../utils/uploadImage");
+const Tournament = require("../models/Tournament");
+const Match = require("../models/Match");
 
 // ---------------- Create TEAM ----------------
 exports.createTeam = async (req, res) => {
@@ -139,7 +141,7 @@ exports.removePlayer = async (req, res) => {
 // ---------------- PUBLIC GET TEAM ----------------
 exports.getTeam = async (req, res) => {
   try {
-    const team = await Team.findById(req.params.id).populate("players", "name profileImageUrl position");
+    const team = await Team.findById(req.params.id).populate("players", "name profileImageUrl position jerseyNumber age footed isFreeAgent");
     if (!team) return res.status(404).json({ message: "Team not found" });
 
     res.json(team);
@@ -178,5 +180,97 @@ exports.getAllTeams = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+
+
+// ---------------- GET TEAM PLAYERS ----------------
+exports.getTeamPlayers = async (req, res) => {
+  try {
+    const { teamId } = req.params;
+
+    const team = await Team.findById(teamId).populate({
+      path: "players",
+      select:
+        "name profileImageUrl position jerseyNumber age footed isFreeAgent",
+    });
+
+    if (!team) {
+      return res.status(404).json({ message: "Team not found" });
+    }
+
+    res.json({
+      teamId: team._id,
+      teamName: team.teamName,
+      players: team.players,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// teamController.js
+exports.getMyTournaments = async (req, res) => {
+  try {
+    if (req.user.role !== "team") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const team = await Team.findOne({ createdBy: req.user.id });
+    if (!team) {
+      return res.status(404).json({ message: "Team not found" });
+    }
+
+    const tournaments = await Tournament.find({
+      "teams.team": team._id,
+    })
+      .select("name status startDate endDate teams")
+      .sort({ startDate: -1 });
+
+    res.json(tournaments);
+  } catch (err) {
+    console.error("getMyTournaments error:", err);
+    res.status(500).json({ message: "Failed to load tournaments" });
+  }
+};
+
+
+exports.getJoinedTournaments = async (req, res) => {
+  if (req.user.role !== "team") {
+    return res.status(403).json({ message: "Access denied" });
+  }
+
+  const team = await Team.findOne({ createdBy: req.user.id });
+  if (!team) {
+    return res.status(404).json({ message: "Team not found" });
+  }
+
+  const tournaments = await Tournament.find({
+    "teams.team": team._id,
+  })
+    .populate("organiser", "name")
+    .sort({ startDate: 1 });
+
+  const data = await Promise.all(
+    tournaments.map(async (t) => {
+      const upcomingMatches = await Match.countDocuments({
+        tournamentId: t._id,
+        status: { $in: ["PENDING", "ACCEPTED"] },
+        $or: [{ homeTeam: team._id }, { awayTeam: team._id }],
+      });
+
+      return {
+        id: t._id,
+        name: t.name,
+        status: t.status,
+        startDate: t.startDate,
+        venue: t.venue,
+        upcomingMatches,
+      };
+    })
+  );
+
+  res.json(data);
+};
+
 
 

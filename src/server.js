@@ -28,6 +28,16 @@ app.use("/api/team", teamRoutes);
 const matchRoutes = require("./routes/matchRoutes");
 app.use("/api/match", matchRoutes);
 
+const tournamentRoutes = require("./routes/tournamentRoutes");
+app.use("/api/tournament", tournamentRoutes);
+
+const matchLineupRoutes = require("./routes/matchLineupRoutes");
+app.use("/api/matchlineup", matchLineupRoutes);
+
+const organiserRoutes = require("./routes/organiserRoutes");
+app.use("/api/organiser", organiserRoutes);
+
+
 // Start Server
 const PORT = process.env.PORT || 5000;
 

@@ -3,7 +3,13 @@ const mongoose = require("mongoose");
 const teamSchema = new mongoose.Schema(
   {
     // Basic Identity
-    teamName: { type: String, required: true, trim: true, unique: true , index:true },
+    teamName: {
+      type: String,
+      required: true,
+      trim: true,
+      unique: true,
+      index: true,
+    },
     description: { type: String, default: "" },
     location: { type: String, default: "" },
     foundedYear: { type: Number },
@@ -11,7 +17,7 @@ const teamSchema = new mongoose.Schema(
     // Branding and Media
     teamLogoUrl: { type: String, default: "" },
     coverImageUrl: { type: String, default: "" },
-    galleryImages: [{ type: String }], // array of image URLs
+    galleryImages: [{ type: String }],
 
     teamType: {
       type: String,
@@ -25,6 +31,34 @@ const teamSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+
+    // ✅ FIXED: Saved Lineup (VALID)
+  savedLineup: {
+  formation: {
+    type: String,
+    enum: ["4-3-3", "4-4-2", "3-5-2", "5-3-2", "4-2-3-1", "4-1-4-1"],
+  },
+
+  starting: [
+    {
+      slotKey: { type: String, required: true },
+      player: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Player",
+        default: null,
+      },
+    },
+  ],
+
+  bench: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Player",
+    },
+  ],
+},
+
+
 
     admins: [
       {
@@ -53,7 +87,7 @@ const teamSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Team Statistics (expandable)
+    // Team Statistics
     matchesPlayed: { type: Number, default: 0 },
     wins: { type: Number, default: 0 },
     draws: { type: Number, default: 0 },
