@@ -30,23 +30,20 @@ exports.signup = async (req, res) => {
 };
 
 // ================= LOGIN =================
+// authController.js - Your current code is GOOD!
 exports.login = async (req, res) => {
   try {
     const { mobile, password } = req.body;
-
-    // Check user
     const user = await User.findOne({ mobile });
     if (!user) return res.status(400).json({ message: "User not found" });
 
-    // Check password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid password" });
 
-    // Create JWT token with more user data
     const token = jwt.sign(
       {
         id: user._id,
-        name: user.name,
+        name: user.name,  // ✅ This is already here - perfect!
         mobile: user.mobile,
         role: user.role,
         email: user.email || "",
@@ -58,7 +55,7 @@ exports.login = async (req, res) => {
     res.json({
       message: "Login Successful",
       token,
-      user,
+      user,  // ✅ You're already sending user - perfect!
     });
 
   } catch (error) {

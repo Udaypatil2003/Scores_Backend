@@ -79,6 +79,11 @@ const tournamentSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    winner: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "Team",
+  default: null,
+},
   },
   { timestamps: true }
 );

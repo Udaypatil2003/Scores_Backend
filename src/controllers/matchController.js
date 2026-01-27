@@ -323,44 +323,97 @@ exports.getMatchById = async (req, res) => {
   }
 };
 
-// ================= Start Match =================
+// ================= Start Match (IMPROVED) =================
 exports.startMatch = async (req, res) => {
-  const { matchId } = req.body;
+  try {
+    const { matchId } = req.body;
 
-  const match = await Match.findById(matchId);
+    if (!matchId) {
+      return res.status(400).json({ message: "Match ID is required" });
+    }
 
-  if (!match) {
-    return res.status(404).json({ message: "Match not found" });
-  }
+    const match = await Match.findById(matchId)
+      .populate("homeTeam", "teamName")
+      .populate("awayTeam", "teamName");
 
-  if (match.status !== "ACCEPTED") {
-    return res.status(400).json({ message: "Match cannot be started" });
-  }
+    if (!match) {
+      return res.status(404).json({ message: "Match not found" });
+    }
 
-  if (match.createdBy.toString() !== req.user.id) {
-    return res
-      .status(403)
-      .json({ message: "Only creator can start the match" });
-  }
+    // ==================== STATUS VALIDATION ====================
+    if (match.status !== "ACCEPTED") {
+      return res.status(400).json({ 
+        message: `Match cannot be started. Current status: ${match.status}` 
+      });
+    }
 
-  const isValidLineup = (l) =>
-    l && l.formation && Array.isArray(l.starting) && l.starting.length > 0;
+    // ==================== PERMISSION LOGIC ====================
+    const isTournamentMatch = !!match.tournamentId;
+    const isCreator = match.createdBy.toString() === req.user.id;
+    const isOrganiser = req.user.role === "organiser";
 
-  const homeLineup = match.lineups?.home;
-  const awayLineup = match.lineups?.away;
+    let canStart = false;
 
-  if (!isValidLineup(homeLineup) || !isValidLineup(awayLineup)) {
-    return res.status(400).json({
-      message: "Both teams must submit at least one starting player",
+    if (isTournamentMatch) {
+      // Tournament matches: ONLY organiser can start
+      canStart = isOrganiser;
+    } else {
+      // Friendly/Practice: Only creator can start
+      canStart = isCreator;
+    }
+
+    if (!canStart) {
+      return res.status(403).json({ 
+        message: isTournamentMatch 
+          ? "Only tournament organiser can start this match"
+          : "Only match creator can start this match"
+      });
+    }
+
+    // ==================== LINEUP VALIDATION ====================
+    const isValidLineup = (lineup) => 
+      lineup && 
+      lineup.formation && 
+      Array.isArray(lineup.starting) && 
+      lineup.starting.length > 0 &&
+      lineup.submittedAt; // ✅ MUST be submitted
+
+    const homeLineup = match.lineups?.home;
+    const awayLineup = match.lineups?.away;
+
+    if (!isValidLineup(homeLineup)) {
+      return res.status(400).json({
+        message: `${match.homeTeam.teamName} has not submitted their lineup yet`
+      });
+    }
+
+    if (!isValidLineup(awayLineup)) {
+      return res.status(400).json({
+        message: `${match.awayTeam.teamName} has not submitted their lineup yet`
+      });
+    }
+
+    // ==================== START MATCH ====================
+    match.status = "LIVE";
+    match.startedAt = new Date();
+
+    await match.save();
+
+    return res.json({ 
+      message: "Match started successfully",
+      match: {
+        _id: match._id,
+        status: match.status,
+        startedAt: match.startedAt,
+        homeTeam: match.homeTeam,
+        awayTeam: match.awayTeam,
+      }
     });
+
+  } catch (error) {
+    console.error("START MATCH ERROR:", error);
+    return res.status(500).json({ message: "Failed to start match" });
   }
-
-  match.status = "LIVE";
-  match.startedAt = new Date();
-
-  await match.save();
-
-  res.json({ message: "Match started", match });
 };
 
 // =================  match event =================
