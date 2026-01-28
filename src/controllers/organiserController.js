@@ -3,86 +3,107 @@ const { uploadImage } = require("../utils/uploadImage");
 const Tournament = require("../models/Tournament");
 const Match = require("../models/Match");
 
-/**
- * CREATE OR UPDATE ORGANISER PROFILE
- * Called AFTER signup & login
- * Role must be "organiser"
- */
 exports.saveOrganiserProfile = async (req, res) => {
   try {
-    // 🔒 Role guard
+    console.log("📥 SAVE PROFILE REQUEST");
+    console.log("User:", req.user.id);
+    console.log("Body:", req.body);
+    console.log("Files:", req.files);
+
     if (req.user.role !== "organiser") {
-      return res
-        .status(403)
-        .json({ message: "Only organisers can access this resource" });
+      return res.status(403).json({
+        message: "Only organisers can access this resource",
+      });
     }
 
     const {
       name,
-      description,
-      contactEmail,
-      contactPhone,
-      location,
+      description = "",
+      contactEmail = "",
+      contactPhone = "",
+      location = "",
     } = req.body;
 
-    if (!name) {
+    if (!name || !name.trim()) {
       return res.status(400).json({
         message: "Organiser name is required",
       });
     }
 
-    let logoUrl = "";
-
+    // ✅ HANDLE LOGO UPLOAD (only once!)
+    let logoUrl = null;
     if (req.files?.logo?.[0]) {
-      logoUrl = await uploadImage(
-        req.files.logo[0].buffer,
-        "organisers"
-      );
+      console.log("📸 Uploading logo...");
+      try {
+        logoUrl = await uploadImage(req.files.logo[0].buffer, "organisers");
+        console.log("✅ Logo uploaded successfully:", logoUrl);
+      } catch (uploadErr) {
+        console.error("❌ Logo upload failed:", uploadErr);
+        return res.status(500).json({
+          message: "Failed to upload logo",
+          error: uploadErr.message,
+        });
+      }
     }
 
     let organiser = await Organiser.findOne({ user: req.user.id });
 
-    // ---------------- CREATE ----------------
+    // CREATE NEW PROFILE
     if (!organiser) {
+      console.log("Creating new organiser profile...");
+
       organiser = await Organiser.create({
         user: req.user.id,
-        name,
+        name: name.trim(),
         description,
         contactEmail,
         contactPhone,
         location,
-        logoUrl,
+        logoUrl: logoUrl || "", // ✅ Use uploaded URL or empty string
       });
 
+      console.log("✅ Profile created:", organiser._id);
+
       return res.status(201).json({
+        success: true,
         message: "Organiser profile created successfully",
         organiser,
       });
     }
 
-    // ---------------- UPDATE ----------------
-    organiser.name = name;
-    organiser.description = description || organiser.description;
-    organiser.contactEmail = contactEmail || organiser.contactEmail;
-    organiser.contactPhone = contactPhone || organiser.contactPhone;
-    organiser.location = location || organiser.location;
+    // UPDATE EXISTING PROFILE
+    console.log("Updating existing organiser profile...");
 
-    if (logoUrl) organiser.logoUrl = logoUrl;
+    organiser.name = name.trim();
+    organiser.description = description;
+    organiser.contactEmail = contactEmail;
+    organiser.contactPhone = contactPhone;
+    organiser.location = location;
+
+    // ✅ Only update logo if new one was uploaded
+    if (logoUrl) {
+      organiser.logoUrl = logoUrl;
+    }
 
     await organiser.save();
 
+    console.log("✅ Profile updated successfully");
+
     res.json({
+      success: true,
       message: "Organiser profile updated successfully",
       organiser,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("❌ SAVE ORGANISER PROFILE ERROR:", err);
+    res.status(500).json({
+      message: err.message,
+      error: process.env.NODE_ENV === "development" ? err.stack : undefined,
+    });
   }
 };
 
-/**
- * GET MY ORGANISER PROFILE
- */
+/** * GET MY ORGANISER PROFILE*/
 exports.getMyOrganiserProfile = async (req, res) => {
   try {
     if (req.user.role !== "organiser") {
@@ -128,7 +149,6 @@ exports.checkOrganiserProfile = async (req, res) => {
 // GET MY TOURNAMENTS (ORGANISER)
 exports.getMyTournaments = async (req, res) => {
   try {
-    // 🔒 Role guard
     if (req.user.role !== "organiser") {
       return res.status(403).json({
         message: "Only organisers can access tournaments",
@@ -167,4 +187,3 @@ exports.getMyMatches = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
