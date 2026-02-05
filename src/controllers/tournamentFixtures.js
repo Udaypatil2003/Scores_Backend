@@ -111,7 +111,6 @@ function generateKnockoutFixtures(tournament, teams, organiserId) {
   return matches;
 }
 
-// ================= LEAGUE FIXTURE GENERATOR (ROUND ROBIN) =================
 function generateLeagueFixtures(tournament, teams, organiserId) {
   const matches = [];
   const numTeams = teams.length;
@@ -135,7 +134,7 @@ function generateLeagueFixtures(tournament, teams, organiserId) {
       const homeTeam = match === 0 ? teamsForRobin[teamsForRobin.length - 1] : teamsForRobin[home];
       const awayTeam = teamsForRobin[away];
       
-      // Skip if either team is null (BYE round)
+      // Skip if either team is null 
       if (homeTeam && awayTeam) {
         matches.push({
           createdBy: organiserId,

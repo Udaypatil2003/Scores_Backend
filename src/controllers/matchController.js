@@ -251,28 +251,60 @@ exports.respondToMatch = async (req, res) => {
 };
 
 // ================= GET MY MATCHES (TEAM DASHBOARD) =================
+// ================= GET MY MATCHES (TEAM DASHBOARD) =================
 exports.getMyMatches = async (req, res) => {
   try {
-    if (req.user.role !== "team") {
-      return res
-        .status(403)
-        .json({ message: "Only team owners can view matches" });
-    }
 
-    const myTeam = await Team.findOne({ createdBy: req.user.id });
-    if (!myTeam) {
-      return res.status(404).json({ message: "Your team not found" });
-    }
+    let matches = [];
 
-    const matches = await Match.find({
-      $or: [{ homeTeam: myTeam._id }, { awayTeam: myTeam._id }],
-    })
-      .populate("homeTeam", "teamName teamLogoUrl")
-      .populate("awayTeam", "teamName teamLogoUrl")
-      .sort({ scheduledAt: 1 });
+    if (req.user.role === "team") {
+      // ==================== TEAM OWNERS ====================
+      const myTeam = await Team.findOne({ createdBy: req.user.id });
+      if (!myTeam) {
+        return res.status(404).json({ message: "Your team not found" });
+      }
+
+      matches = await Match.find({
+        $or: [{ homeTeam: myTeam._id }, { awayTeam: myTeam._id }],
+      })
+        .populate("homeTeam", "teamName teamLogoUrl")
+        .populate("awayTeam", "teamName teamLogoUrl")
+        .sort({ scheduledAt: -1 }); // Most recent first
+    } else if (req.user.role === "player") {
+      // ==================== PLAYERS ====================
+      const player = await Player.findOne({ userId: req.user.id });
+
+      if (!player) {
+        return res.status(404).json({ message: "Player profile not found" });
+      }
+
+
+      // Find matches where player is in starting XI or bench
+      matches = await Match.find({
+        $or: [
+          // Player in home team starting XI
+          { "lineups.home.starting.player": player._id },
+          // Player in home team bench
+          { "lineups.home.bench": player._id },
+          // Player in away team starting XI
+          { "lineups.away.starting.player": player._id },
+          // Player in away team bench
+          { "lineups.away.bench": player._id },
+        ],
+      })
+        .populate("homeTeam", "teamName teamLogoUrl")
+        .populate("awayTeam", "teamName teamLogoUrl")
+        .sort({ scheduledAt: -1 });
+
+    } else {
+      return res.status(403).json({
+        message: "Access denied. Only team owners and players can view matches",
+      });
+    }
 
     res.json(matches);
   } catch (error) {
+    console.error("💥 Error in getMyMatches:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -342,8 +374,8 @@ exports.startMatch = async (req, res) => {
 
     // ==================== STATUS VALIDATION ====================
     if (match.status !== "ACCEPTED") {
-      return res.status(400).json({ 
-        message: `Match cannot be started. Current status: ${match.status}` 
+      return res.status(400).json({
+        message: `Match cannot be started. Current status: ${match.status}`,
       });
     }
 
@@ -363,18 +395,18 @@ exports.startMatch = async (req, res) => {
     }
 
     if (!canStart) {
-      return res.status(403).json({ 
-        message: isTournamentMatch 
+      return res.status(403).json({
+        message: isTournamentMatch
           ? "Only tournament organiser can start this match"
-          : "Only match creator can start this match"
+          : "Only match creator can start this match",
       });
     }
 
     // ==================== LINEUP VALIDATION ====================
-    const isValidLineup = (lineup) => 
-      lineup && 
-      lineup.formation && 
-      Array.isArray(lineup.starting) && 
+    const isValidLineup = (lineup) =>
+      lineup &&
+      lineup.formation &&
+      Array.isArray(lineup.starting) &&
       lineup.starting.length > 0 &&
       lineup.submittedAt; // ✅ MUST be submitted
 
@@ -383,13 +415,13 @@ exports.startMatch = async (req, res) => {
 
     if (!isValidLineup(homeLineup)) {
       return res.status(400).json({
-        message: `${match.homeTeam.teamName} has not submitted their lineup yet`
+        message: `${match.homeTeam.teamName} has not submitted their lineup yet`,
       });
     }
 
     if (!isValidLineup(awayLineup)) {
       return res.status(400).json({
-        message: `${match.awayTeam.teamName} has not submitted their lineup yet`
+        message: `${match.awayTeam.teamName} has not submitted their lineup yet`,
       });
     }
 
@@ -399,7 +431,7 @@ exports.startMatch = async (req, res) => {
 
     await match.save();
 
-    return res.json({ 
+    return res.json({
       message: "Match started successfully",
       match: {
         _id: match._id,
@@ -407,9 +439,8 @@ exports.startMatch = async (req, res) => {
         startedAt: match.startedAt,
         homeTeam: match.homeTeam,
         awayTeam: match.awayTeam,
-      }
+      },
     });
-
   } catch (error) {
     console.error("START MATCH ERROR:", error);
     return res.status(500).json({ message: "Failed to start match" });
@@ -733,7 +764,6 @@ exports.endMatch = async (req, res) => {
 
   try {
     const { matchId } = req.body;
-  
 
     if (!matchId) {
       return res.status(400).json({ message: "Match ID is required" });
@@ -745,14 +775,14 @@ exports.endMatch = async (req, res) => {
     }
 
     console.log("END MATCH DEBUG", {
-  matchId,
-  status: match.status,
-  homeLineup: !!match.lineups?.home,
-  awayLineup: !!match.lineups?.away,
-  homeStarting: match.lineups?.home?.starting?.length,
-  awayStarting: match.lineups?.away?.starting?.length,
-  eventsCount: match.events?.length,
-});
+      matchId,
+      status: match.status,
+      homeLineup: !!match.lineups?.home,
+      awayLineup: !!match.lineups?.away,
+      homeStarting: match.lineups?.home?.starting?.length,
+      awayStarting: match.lineups?.away?.starting?.length,
+      eventsCount: match.events?.length,
+    });
 
     if (match.status !== "LIVE") {
       return res.status(400).json({ message: "Match is not live" });
@@ -878,19 +908,18 @@ exports.endMatch = async (req, res) => {
     /* ----------------------------------------------------
        GK CLEAN SHEET (GK ONLY)
     ---------------------------------------------------- */
-   const applyGKCleanSheet = (lineup, conceded) => {
-  if (!lineup?.starting || conceded !== 0) return;
+    const applyGKCleanSheet = (lineup, conceded) => {
+      if (!lineup?.starting || conceded !== 0) return;
 
-  const gkSlot = lineup.starting.find(
-    (s) => s.slotKey === "GK" && s.player
-  );
+      const gkSlot = lineup.starting.find(
+        (s) => s.slotKey === "GK" && s.player,
+      );
 
-  if (gkSlot?.player) {
-    ensurePlayer(gkSlot.player.toString());
-    playerStatsMap[gkSlot.player.toString()].cleanSheets += 1;
-  }
-};
-
+      if (gkSlot?.player) {
+        ensurePlayer(gkSlot.player.toString());
+        playerStatsMap[gkSlot.player.toString()].cleanSheets += 1;
+      }
+    };
 
     applyGKCleanSheet(match.lineups?.home, awayGoals);
     applyGKCleanSheet(match.lineups?.away, homeGoals);
@@ -912,7 +941,7 @@ exports.endMatch = async (req, res) => {
             cleanSheets: stats.cleanSheets || 0,
           },
         },
-        { session }
+        { session },
       );
     }
 
@@ -935,7 +964,6 @@ exports.endMatch = async (req, res) => {
       score: match.score,
       winner,
     });
-
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
@@ -952,19 +980,19 @@ exports.getMatchLineups = async (req, res) => {
       .populate("awayTeam", "teamName teamLogoUrl")
       .populate(
         "lineups.home.starting.player",
-        "name profileImageUrl position jerseyNumber"
+        "name profileImageUrl position jerseyNumber",
       )
       .populate(
         "lineups.home.bench",
-        "name profileImageUrl position jerseyNumber"
+        "name profileImageUrl position jerseyNumber",
       )
       .populate(
         "lineups.away.starting.player",
-        "name profileImageUrl position jerseyNumber"
+        "name profileImageUrl position jerseyNumber",
       )
       .populate(
         "lineups.away.bench",
-        "name profileImageUrl position jerseyNumber"
+        "name profileImageUrl position jerseyNumber",
       );
 
     if (!match) {
@@ -1104,7 +1132,6 @@ exports.getMatchSummary = async (req, res) => {
   }
 };
 
-
 // ================= GET MATCHES BY TOURNAMENT (TEAM VIEW) =================
 exports.getMatchesByTournament = async (req, res) => {
   try {
@@ -1127,20 +1154,15 @@ exports.getMatchesByTournament = async (req, res) => {
       .lean(); // IMPORTANT
 
     const data = matches.map((match) => {
-      const isHome =
-        match.homeTeam._id.toString() === team._id.toString();
-      const isAway =
-        match.awayTeam._id.toString() === team._id.toString();
+      const isHome = match.homeTeam._id.toString() === team._id.toString();
+      const isAway = match.awayTeam._id.toString() === team._id.toString();
 
       const side = isHome ? "home" : isAway ? "away" : null;
 
-      const lineupSubmitted =
-        side && match.lineups?.[side]?.submittedAt;
+      const lineupSubmitted = side && match.lineups?.[side]?.submittedAt;
 
-     const canEditLineup =
-  !!side &&
-  !["LIVE", "COMPLETED"].includes(match.status);
-
+      const canEditLineup =
+        !!side && !["LIVE", "COMPLETED"].includes(match.status);
 
       return {
         ...match,
@@ -1158,5 +1180,3 @@ exports.getMatchesByTournament = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
-

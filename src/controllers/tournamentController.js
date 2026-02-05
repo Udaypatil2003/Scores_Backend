@@ -420,7 +420,8 @@ exports.getTournament = async (req, res) => {
 
   const tournament = await Tournament.findById(id)
     .populate("organiser", "name")
-    .populate("teams.team", "teamName teamLogoUrl");
+    .populate("teams.team", "teamName teamLogoUrl")
+    .populate("winner", "teamName teamLogoUrl"); // ✅ ADD THIS
 
   if (!tournament) {
     return res.status(404).json({ message: "Tournament not found" });
