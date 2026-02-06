@@ -1,7 +1,11 @@
 const express = require("express");
+const http = require("http");
 const cors = require("cors");
 const connectDB = require("./config/db");
 require("dotenv").config();
+
+const { initializeSocket } = require("./socket/socketServer");
+
 
 // App init
 const app = express();
@@ -38,9 +42,18 @@ const organiserRoutes = require("./routes/organiserRoutes");
 app.use("/api/organiser", organiserRoutes);
 
 
-// Start Server
-const PORT = process.env.PORT || 5000;
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", message: "Server is running" });
+});
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const server = http.createServer(app);
+initializeSocket(server);
+
+
+
+// Start Server
+const PORT = process.env.PORT || 8000;
+
+server.listen(PORT,"0.0.0.0", () => {
+  console.log(`🚀 Server + Socket.IO running on port ${PORT}`);
 });

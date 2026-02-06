@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon src/server.js"
+    "start": "nodemon src/server.js"
   },
   "keywords": [],
   "author": "",
@@ -21,7 +21,6 @@
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1",
     "streamifier": "^0.1.1"
   },
   "devDependencies": {
