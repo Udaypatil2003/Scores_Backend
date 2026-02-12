@@ -42,7 +42,7 @@ const organiserRoutes = require("./routes/organiserRoutes");
 app.use("/api/organiser", organiserRoutes);
 
 
-app.get("/health", (req, res) => {
+app.get("/healthstatus", (req, res) => {
   res.json({ status: "ok", message: "Server is running" });
 });
 
