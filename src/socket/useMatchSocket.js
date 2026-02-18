@@ -3,7 +3,7 @@ import SocketManager from "./SocketManager";
 
 /**
  * Hook for managing match socket events
- * 
+ *
  * Usage:
  * const { matchData, isConnected } = useMatchSocket(matchId, {
  *   onGoal: (data) => console.log("Goal!", data),
@@ -29,7 +29,6 @@ const useMatchSocket = (matchId, callbacks = {}) => {
     // Ensure socket is connected
     const initSocket = async () => {
       try {
-       
         setIsConnected(true);
       } catch (err) {
         console.error("Failed to connect socket:", err);
@@ -126,6 +125,25 @@ const useMatchSocket = (matchId, callbacks = {}) => {
         }
       };
 
+      // Add this handler with the other handlers
+      const handleMatchReset = (data) => {
+        console.log("🔄 Match reset:", data);
+        setMatchData((prev) => ({
+          ...prev,
+          score: data.score,
+          status: data.status,
+          events: [],
+          startedAt: null,
+          completedAt: null,
+          winner: null,
+        }));
+        if (callbacksRef.current.onReset) {
+          callbacksRef.current.onReset(data);
+        }
+      };
+
+      // Register the listener (add this with other SocketManager.on calls)
+      SocketManager.on("match:reset", handleMatchReset);
       // Register all listeners
       SocketManager.on("match:joined", handleMatchJoined);
       SocketManager.on("match:start", handleMatchStart);
@@ -172,11 +190,24 @@ const useMatchSocket = (matchId, callbacks = {}) => {
     startMatch: () => SocketManager.startMatch(matchId),
     endMatch: () => SocketManager.endMatch(matchId),
     addGoal: (teamId, playerId, minute, assistPlayerId, type) =>
-      SocketManager.addGoal(matchId, teamId, playerId, minute, assistPlayerId, type),
+      SocketManager.addGoal(
+        matchId,
+        teamId,
+        playerId,
+        minute,
+        assistPlayerId,
+        type,
+      ),
     addCard: (teamId, playerId, minute, type) =>
       SocketManager.addCard(matchId, teamId, playerId, minute, type),
     addSubstitution: (teamId, playerOutId, playerInId, minute) =>
-      SocketManager.addSubstitution(matchId, teamId, playerOutId, playerInId, minute),
+      SocketManager.addSubstitution(
+        matchId,
+        teamId,
+        playerOutId,
+        playerInId,
+        minute,
+      ),
   };
 };
 

@@ -95,19 +95,11 @@ const matchSchema = new mongoose.Schema(
 
     scheduledAt: { type: Date, required: true },
 
-    status: {
-      type: String,
-      enum: [
-        "DRAFT",
-        "PENDING",
-        "ACCEPTED",
-        "LIVE",
-        "REJECTED",
-        "CANCELLED",
-        "COMPLETED",
-      ],
-      default: "PENDING",
-    },
+  status: {
+  type: String,
+  enum: ["PENDING", "ACCEPTED", "LIVE", "PAUSED", "COMPLETED", "CANCELLED",    "REJECTED", ],
+  default: "PENDING",
+},
 
     approval: {
       approvedBy: {

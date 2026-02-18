@@ -30,7 +30,6 @@ module.exports = (io, socket) => {
         matchId,
         message: "Successfully joined match room",
       });
-
     } catch (error) {
       console.error("Error in match:join:", error);
       socket.emit("error", { message: "Failed to join match room" });
@@ -55,7 +54,6 @@ module.exports = (io, socket) => {
         matchId,
         message: "Successfully left match room",
       });
-
     } catch (error) {
       console.error("Error in match:leave:", error);
       socket.emit("error", { message: "Failed to leave match room" });
@@ -79,7 +77,7 @@ module.exports = (io, socket) => {
         socket.userId,
         socket.userRole,
         socket.teamId,
-        socket.organiserId
+        socket.organiserId,
       );
 
       if (!permission.allowed) {
@@ -95,7 +93,7 @@ module.exports = (io, socket) => {
           status: "LIVE",
           startedAt: new Date(),
         },
-        { new: true }
+        { new: true },
       )
         .populate("homeTeam", "teamName teamLogoUrl")
         .populate("awayTeam", "teamName teamLogoUrl")
@@ -113,7 +111,6 @@ module.exports = (io, socket) => {
       });
 
       console.log(`⚽ Match started: ${matchId} by ${socket.userId}`);
-
     } catch (error) {
       console.error("Error in match:start:", error);
       socket.emit("error", { message: "Failed to start match" });
@@ -137,7 +134,8 @@ module.exports = (io, socket) => {
         socket.userId,
         socket.userRole,
         socket.teamId,
-        socket.organiserId
+        socket.organiserId,
+        "RESET", // 👈 pass special type
       );
 
       if (!permission.allowed) {
@@ -160,11 +158,14 @@ module.exports = (io, socket) => {
       const updatedMatch = await Match.findByIdAndUpdate(
         matchId,
         {
-          status: "COMPLETED",
-          completedAt: new Date(),
-          winner: winner,
+          score: { home: 0, away: 0 },
+          events: [],
+          status: "ACCEPTED",
+          startedAt: null,
+          completedAt: null,
+          winner: null,
         },
-        { new: true }
+        { new: true },
       )
         .populate("homeTeam", "teamName teamLogoUrl")
         .populate("awayTeam", "teamName teamLogoUrl")
@@ -183,7 +184,6 @@ module.exports = (io, socket) => {
       });
 
       console.log(`🏁 Match ended: ${matchId}`);
-
     } catch (error) {
       console.error("Error in match:end:", error);
       socket.emit("error", { message: "Failed to end match" });
@@ -196,7 +196,8 @@ module.exports = (io, socket) => {
    */
   socket.on("match:goal", async (payload) => {
     try {
-      const { matchId, teamId, playerId, assistPlayerId, minute, type } = payload;
+      const { matchId, teamId, playerId, assistPlayerId, minute, type } =
+        payload;
 
       if (!matchId || !teamId || !playerId || minute == null) {
         return socket.emit("error", { message: "Missing required fields" });
@@ -208,7 +209,7 @@ module.exports = (io, socket) => {
         socket.userId,
         socket.userRole,
         socket.teamId,
-        socket.organiserId
+        socket.organiserId,
       );
 
       if (!permission.allowed) {
@@ -236,11 +237,9 @@ module.exports = (io, socket) => {
         $inc: isHomeTeam ? { "score.home": 1 } : { "score.away": 1 },
       };
 
-      const updatedMatch = await Match.findByIdAndUpdate(
-        matchId,
-        updateQuery,
-        { new: true }
-      )
+      const updatedMatch = await Match.findByIdAndUpdate(matchId, updateQuery, {
+        new: true,
+      })
         .populate("events.player", "playerName")
         .populate("events.assistPlayer", "playerName")
         .populate("homeTeam", "teamName")
@@ -261,7 +260,6 @@ module.exports = (io, socket) => {
       });
 
       console.log(`⚽ Goal added to match ${matchId} by ${socket.userId}`);
-
     } catch (error) {
       console.error("Error in match:goal:", error);
       socket.emit("error", { message: "Failed to add goal" });
@@ -281,7 +279,9 @@ module.exports = (io, socket) => {
       }
 
       if (!["YELLOW", "RED"].includes(type)) {
-        return socket.emit("error", { message: "Card type must be YELLOW or RED" });
+        return socket.emit("error", {
+          message: "Card type must be YELLOW or RED",
+        });
       }
 
       // Check permissions
@@ -290,7 +290,7 @@ module.exports = (io, socket) => {
         socket.userId,
         socket.userRole,
         socket.teamId,
-        socket.organiserId
+        socket.organiserId,
       );
 
       if (!permission.allowed) {
@@ -311,7 +311,7 @@ module.exports = (io, socket) => {
       const updatedMatch = await Match.findByIdAndUpdate(
         matchId,
         { $push: { events: cardEvent } },
-        { new: true }
+        { new: true },
       )
         .populate("events.player", "playerName")
         .populate("homeTeam", "teamName")
@@ -330,8 +330,9 @@ module.exports = (io, socket) => {
         awayTeam: updatedMatch.awayTeam,
       });
 
-      console.log(`🟨 ${type} card added to match ${matchId} by ${socket.userId}`);
-
+      console.log(
+        `🟨 ${type} card added to match ${matchId} by ${socket.userId}`,
+      );
     } catch (error) {
       console.error("Error in match:card:", error);
       socket.emit("error", { message: "Failed to add card" });
@@ -346,7 +347,13 @@ module.exports = (io, socket) => {
     try {
       const { matchId, teamId, playerOutId, playerInId, minute } = payload;
 
-      if (!matchId || !teamId || !playerOutId || !playerInId || minute == null) {
+      if (
+        !matchId ||
+        !teamId ||
+        !playerOutId ||
+        !playerInId ||
+        minute == null
+      ) {
         return socket.emit("error", { message: "Missing required fields" });
       }
 
@@ -356,7 +363,7 @@ module.exports = (io, socket) => {
         socket.userId,
         socket.userRole,
         socket.teamId,
-        socket.organiserId
+        socket.organiserId,
       );
 
       if (!permission.allowed) {
@@ -378,7 +385,7 @@ module.exports = (io, socket) => {
       const updatedMatch = await Match.findByIdAndUpdate(
         matchId,
         { $push: { events: subEvent } },
-        { new: true }
+        { new: true },
       )
         .populate("events.player", "playerName")
         .populate("events.substitutedPlayer", "playerName")
@@ -398,8 +405,9 @@ module.exports = (io, socket) => {
         awayTeam: updatedMatch.awayTeam,
       });
 
-      console.log(`🔄 Substitution added to match ${matchId} by ${socket.userId}`);
-
+      console.log(
+        `🔄 Substitution added to match ${matchId} by ${socket.userId}`,
+      );
     } catch (error) {
       console.error("Error in match:substitution:", error);
       socket.emit("error", { message: "Failed to add substitution" });
@@ -414,21 +422,33 @@ module.exports = (io, socket) => {
   socket.on("match:status", async ({ matchId, status }) => {
     try {
       if (!matchId || !status) {
-        return socket.emit("error", { message: "Match ID and status are required" });
+        return socket.emit("error", {
+          message: "Match ID and status are required",
+        });
       }
 
-      const validStatuses = ["DRAFT", "PENDING", "ACCEPTED", "LIVE", "REJECTED", "CANCELLED", "COMPLETED"];
+      const validStatuses = [
+        "DRAFT",
+        "PENDING",
+        "ACCEPTED",
+        "LIVE",
+        "PAUSED",
+        "REJECTED",
+        "CANCELLED",
+        "COMPLETED",
+      ];
       if (!validStatuses.includes(status)) {
         return socket.emit("error", { message: "Invalid status" });
       }
 
-      // Check permissions
+      // ✅ Pass targetStatus for validation
       const permission = await canUpdateMatch(
         matchId,
         socket.userId,
         socket.userRole,
         socket.teamId,
-        socket.organiserId
+        socket.organiserId,
+        status, // Target status
       );
 
       if (!permission.allowed) {
@@ -441,7 +461,7 @@ module.exports = (io, socket) => {
       const updatedMatch = await Match.findByIdAndUpdate(
         matchId,
         { status: status },
-        { new: true }
+        { new: true },
       )
         .populate("homeTeam", "teamName")
         .populate("awayTeam", "teamName")
@@ -457,10 +477,74 @@ module.exports = (io, socket) => {
       });
 
       console.log(`📊 Match status updated: ${matchId} → ${status}`);
-
     } catch (error) {
       console.error("Error in match:status:", error);
       socket.emit("error", { message: "Failed to update match status" });
+    }
+  });
+
+  /**
+   * RESET MATCH
+   * Only match owner can reset
+   * Resets score, events, and timer back to starting state
+   */
+  socket.on("match:reset", async ({ matchId }) => {
+    try {
+      if (!matchId) {
+        return socket.emit("error", { message: "Match ID is required" });
+      }
+
+      const permission = await canUpdateMatch(
+        matchId,
+        socket.userId,
+        socket.userRole,
+        socket.teamId,
+        socket.organiserId,
+      );
+
+      if (!permission.allowed) {
+        return socket.emit("error", {
+          message: `Cannot reset match: ${permission.reason}`,
+        });
+      }
+
+      // ✅ Make sure events is set to empty array
+      const updatedMatch = await Match.findByIdAndUpdate(
+        matchId,
+        {
+          score: { home: 0, away: 0 },
+          events: [], // ✅ Explicitly empty array
+          startedAt: new Date(),
+          status: "LIVE",
+        },
+        { new: true },
+      )
+        .populate("homeTeam", "teamName teamLogoUrl")
+        .populate("awayTeam", "teamName teamLogoUrl")
+        .lean();
+
+      // ✅ Make sure broadcast includes empty events array
+      const roomName = `match_${matchId}`;
+      io.to(roomName).emit("match:reset", {
+        matchId: updatedMatch._id,
+        score: updatedMatch.score, // Should be {home: 0, away: 0}
+        events: updatedMatch.events || [], // Should be []
+        startedAt: updatedMatch.startedAt,
+        status: updatedMatch.status,
+        homeTeam: updatedMatch.homeTeam,
+        awayTeam: updatedMatch.awayTeam,
+        message: "Match has been reset",
+      });
+
+      console.log(`🔄 Match reset: ${matchId} by ${socket.userId}`);
+      console.log(`✅ Reset data:`, {
+        score: updatedMatch.score,
+        events: updatedMatch.events,
+        eventsLength: updatedMatch.events?.length,
+      });
+    } catch (error) {
+      console.error("Error in match:reset:", error);
+      socket.emit("error", { message: "Failed to reset match" });
     }
   });
 };

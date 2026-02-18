@@ -3,12 +3,12 @@ const Tournament = require("../models/Tournament");
 
 /**
  * Check if user can update a specific match
- * 
+ *
  * RULES:
  * - Organiser can update ONLY tournament matches they own
  * - Team can update ONLY matches they created (createdBy = their userId)
  * - Players CANNOT update any match
- * 
+ *
  * @param {String} matchId - Match ID
  * @param {String} userId - User ID from socket
  * @param {String} userRole - "player" | "team" | "organiser"
@@ -36,7 +36,10 @@ function canUserControlMatch(socket, match, purpose) {
   // TOURNAMENT MATCH
   if (match.tournamentId) {
     if (socket.userRole !== "organiser" || !socket.organiserId) {
-      return { allowed: false, reason: "Only organiser can control tournament match" };
+      return {
+        allowed: false,
+        reason: "Only organiser can control tournament match",
+      };
     }
     return { allowed: true, reason: "Tournament organiser" };
   }
@@ -51,21 +54,72 @@ function canUserControlMatch(socket, match, purpose) {
   return { allowed: false, reason: "You do not control this match " };
 }
 
-const canUpdateMatch = async (matchId, userId, userRole, teamId = null, organiserId = null) => {
+const canUpdateMatch = async (
+  matchId,
+  userId,
+  userRole,
+  teamId = null,
+  organiserId = null,
+  targetStatus = null,
+) => {
   try {
     // Fetch match with necessary fields
     const match = await Match.findById(matchId)
-      .select("createdBy createdByRole status matchType tournamentId homeTeam awayTeam")
+      .select(
+        "createdBy createdByRole status matchType tournamentId homeTeam awayTeam",
+      )
       .lean();
 
     if (!match) {
       return { allowed: false, reason: "Match not found", match: null };
     }
 
-    // Match must be LIVE to accept updates
-    if (match.status !== "LIVE") {
-      return { allowed: false, reason: "Match is not live", match };
+    // ✅ Allow same-status updates (idempotent)
+if (targetStatus && match.status === targetStatus) {
+  return { 
+    allowed: true, 
+    reason: "Status unchanged (idempotent)", 
+    match 
+  };
+}
+
+    // ✅ Define valid status transitions
+    const validTransitions = {
+      ACCEPTED: ["LIVE"], // Can only start
+      LIVE: ["PAUSED", "COMPLETED"], // Can pause or end
+      PAUSED: ["LIVE", "COMPLETED"], // Can resume or end
+    };
+
+    // Check if current status allows updates
+    if (!validTransitions[match.status]) {
+      return {
+        allowed: false,
+        reason: `Cannot update match with status: ${match.status}`,
+        match,
+      };
     }
+
+    // ✅ If targetStatus is provided, validate the transition
+    if (
+      targetStatus &&
+      !validTransitions[match.status].includes(targetStatus)
+    ) {
+      return {
+        allowed: false,
+        reason: `Cannot change from ${match.status} to ${targetStatus}`,
+        match,
+      };
+    }
+    // Special case: RESET
+if (targetStatus === "RESET") {
+  if (!["LIVE", "PAUSED", "COMPLETED"].includes(match.status)) {
+    return {
+      allowed: false,
+      reason: "Match cannot be reset from current state",
+      match,
+    };
+  }
+}
 
     // PLAYER role → ALWAYS DENIED
     if (userRole === "player") {
@@ -79,7 +133,10 @@ const canUpdateMatch = async (matchId, userId, userRole, teamId = null, organise
       }
 
       // Check if this team created the match
-      if (match.createdBy.toString() === userId && match.createdByRole === "team") {
+      if (
+        match.createdBy.toString() === userId &&
+        match.createdByRole === "team"
+      ) {
         return { allowed: true, reason: "Team owner", match };
       }
 
@@ -110,11 +167,14 @@ const canUpdateMatch = async (matchId, userId, userRole, teamId = null, organise
         return { allowed: true, reason: "Tournament organiser", match };
       }
 
-      return { allowed: false, reason: "You do not own this tournament", match };
+      return {
+        allowed: false,
+        reason: "You do not own this tournament",
+        match,
+      };
     }
 
     return { allowed: false, reason: "Invalid role", match };
-
   } catch (error) {
     console.error("Error in canUpdateMatch:", error);
     return { allowed: false, reason: "Server error", match: null };
@@ -125,7 +185,13 @@ const canUpdateMatch = async (matchId, userId, userRole, teamId = null, organise
  * Check if user can start a match
  * Same logic as canUpdateMatch but checks if status is ACCEPTED (ready to start)
  */
-const canStartMatch = async (matchId, userId, userRole, teamId = null, organiserId = null) => {
+const canStartMatch = async (
+  matchId,
+  userId,
+  userRole,
+  teamId = null,
+  organiserId = null,
+) => {
   try {
     const match = await Match.findById(matchId)
       .select("createdBy createdByRole status matchType tournamentId")
@@ -137,7 +203,11 @@ const canStartMatch = async (matchId, userId, userRole, teamId = null, organiser
 
     // Match must be ACCEPTED to be started
     if (match.status !== "ACCEPTED") {
-      return { allowed: false, reason: "Match must be accepted before starting", match };
+      return {
+        allowed: false,
+        reason: "Match must be accepted before starting",
+        match,
+      };
     }
 
     // Apply same ownership rules
@@ -150,7 +220,10 @@ const canStartMatch = async (matchId, userId, userRole, teamId = null, organiser
         return { allowed: false, reason: "Team ID not found", match };
       }
 
-      if (match.createdBy.toString() === userId && match.createdByRole === "team") {
+      if (
+        match.createdBy.toString() === userId &&
+        match.createdByRole === "team"
+      ) {
         return { allowed: true, reason: "Team owner", match };
       }
 
@@ -178,11 +251,14 @@ const canStartMatch = async (matchId, userId, userRole, teamId = null, organiser
         return { allowed: true, reason: "Tournament organiser", match };
       }
 
-      return { allowed: false, reason: "You do not own this tournament", match };
+      return {
+        allowed: false,
+        reason: "You do not own this tournament",
+        match,
+      };
     }
 
     return { allowed: false, reason: "Invalid role", match };
-
   } catch (error) {
     console.error("Error in canStartMatch:", error);
     return { allowed: false, reason: "Server error", match: null };
@@ -207,11 +283,13 @@ const canStartTournament = async (tournamentId, organiserId) => {
     }
 
     if (tournament.status === "LIVE" || tournament.status === "COMPLETED") {
-      return { allowed: false, reason: "Tournament already started or completed" };
+      return {
+        allowed: false,
+        reason: "Tournament already started or completed",
+      };
     }
 
     return { allowed: true, reason: "Tournament owner" };
-
   } catch (error) {
     console.error("Error in canStartTournament:", error);
     return { allowed: false, reason: "Server error" };
