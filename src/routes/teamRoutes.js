@@ -16,9 +16,8 @@ const {
   getMyTournaments,
   getJoinedTournaments
 } = require("../controllers/teamController");
-const { saveLineup, getLineup } = require("../controllers/teamLineupController");
-
-
+const { saveLineup, getLineup } = require("../controllers/teamLineupController")
+const validateObjectId = require("../middleware/validateObjectId");
 // Team user functions
 
 router.post("/create", auth, upload.fields([
@@ -40,7 +39,7 @@ router.put(
 
 router.post("/add-player", auth, addPlayer);
 router.post("/remove-player", auth, removePlayer);
-router.get("/:teamId/players", getTeamPlayers);
+router.get("/:teamId/players", validateObjectId("teamId"), getTeamPlayers);
 
 // Team lineup functions
 router.post("/lineup", auth, saveLineup);
@@ -48,7 +47,7 @@ router.get("/lineup", auth, getLineup);
 
 // Public endpoints
 router.get("/all", getAllTeams);
-router.get("/get/:id", getTeam);
+router.get("/get/:id", validateObjectId("id"), getTeam);
 router.get("/search", auth ,searchTeams);
 router.get("/joinedTournaments", auth ,getJoinedTournaments );
 

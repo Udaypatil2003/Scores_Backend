@@ -1,5 +1,6 @@
 const Match = require("../models/Match");
 const { canUpdateMatch, canStartMatch } = require("../socket/permissions");
+const { endMatchAndUpdateStats } = require("../services/matchService");
 
 module.exports = (io, socket) => {
   /**
@@ -128,14 +129,13 @@ module.exports = (io, socket) => {
         return socket.emit("error", { message: "Match ID is required" });
       }
 
-      // Check permissions
       const permission = await canUpdateMatch(
         matchId,
         socket.userId,
         socket.userRole,
         socket.teamId,
         socket.organiserId,
-        "RESET", // 👈 pass special type
+        "COMPLETED",
       );
 
       if (!permission.allowed) {
@@ -144,49 +144,21 @@ module.exports = (io, socket) => {
         });
       }
 
-      // Determine winner based on score
-      const match = permission.match;
-      let winner = null;
+      // ✅ Use shared service — stats updated correctly
+      const result = await endMatchAndUpdateStats(matchId);
 
-      if (match.score.home > match.score.away) {
-        winner = match.homeTeam;
-      } else if (match.score.away > match.score.home) {
-        winner = match.awayTeam;
-      }
-
-      // Update match status to COMPLETED
-      const updatedMatch = await Match.findByIdAndUpdate(
-        matchId,
-        {
-          score: { home: 0, away: 0 },
-          events: [],
-          status: "ACCEPTED",
-          startedAt: null,
-          completedAt: null,
-          winner: null,
-        },
-        { new: true },
-      )
-        .populate("homeTeam", "teamName teamLogoUrl")
-        .populate("awayTeam", "teamName teamLogoUrl")
-        .populate("winner", "teamName teamLogoUrl")
-        .lean();
-
-      // Broadcast to all users in the match room
       const roomName = `match_${matchId}`;
       io.to(roomName).emit("match:end", {
-        matchId: updatedMatch._id,
-        status: updatedMatch.status,
-        completedAt: updatedMatch.completedAt,
-        finalScore: updatedMatch.score,
-        winner: updatedMatch.winner,
+        matchId,
+        status: "COMPLETED",
+        completedAt: result.match.completedAt,
+        finalScore: result.match.score,
+        winner: result.winner,
         message: "Match has ended",
       });
-
-      console.log(`🏁 Match ended: ${matchId}`);
     } catch (error) {
       console.error("Error in match:end:", error);
-      socket.emit("error", { message: "Failed to end match" });
+      socket.emit("error", { message: error.message || "Failed to end match" });
     }
   });
 
@@ -231,17 +203,26 @@ module.exports = (io, socket) => {
       const match = permission.match;
       const isHomeTeam = match.homeTeam.toString() === teamId;
 
-      // Update score and add event
-      const updateQuery = {
-        $push: { events: goalEvent },
-        $inc: isHomeTeam ? { "score.home": 1 } : { "score.away": 1 },
-      };
-
-      const updatedMatch = await Match.findByIdAndUpdate(matchId, updateQuery, {
-        new: true,
-      })
-        .populate("events.player", "playerName")
-        .populate("events.assistPlayer", "playerName")
+      // ✅ OWN_GOAL credits the opponent
+      let scoreUpdate;
+      if (type === "OWN_GOAL") {
+        scoreUpdate = isHomeTeam
+          ? { "score.away": 1 } // home team own goal → away gets point
+          : { "score.home": 1 }; // away team own goal → home gets point
+      } else {
+        // GOAL or PENALTY_GOAL → credit the scoring team
+        scoreUpdate = isHomeTeam ? { "score.home": 1 } : { "score.away": 1 };
+      }
+      const updatedMatch = await Match.findByIdAndUpdate(
+        matchId,
+        {
+          $push: { events: goalEvent },
+          $inc: scoreUpdate,
+        },
+        { new: true },
+      )
+        .populate("events.player", "name profileImageUrl jerseyNumber")
+        .populate("events.assistPlayer", "name profileImageUrl jerseyNumber")
         .populate("homeTeam", "teamName")
         .populate("awayTeam", "teamName")
         .lean();
@@ -313,7 +294,7 @@ module.exports = (io, socket) => {
         { $push: { events: cardEvent } },
         { new: true },
       )
-        .populate("events.player", "playerName")
+        .populate("events.player", "name profileImageUrl jerseyNumber")
         .populate("homeTeam", "teamName")
         .populate("awayTeam", "teamName")
         .lean();
@@ -387,8 +368,11 @@ module.exports = (io, socket) => {
         { $push: { events: subEvent } },
         { new: true },
       )
-        .populate("events.player", "playerName")
-        .populate("events.substitutedPlayer", "playerName")
+        .populate("events.player", "name profileImageUrl jerseyNumber")
+        .populate(
+          "events.substitutedPlayer",
+          "name profileImageUrl jerseyNumber",
+        )
         .populate("homeTeam", "teamName")
         .populate("awayTeam", "teamName")
         .lean();

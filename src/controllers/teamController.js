@@ -48,7 +48,6 @@
 //   }
 // };
 
-
 // // ---------------- GET MY TEAM ----------------
 // // exports.getMyTeam = async (req, res) => {
 // //   try {
@@ -58,7 +57,7 @@
 // //     console.log("team found:", team);
 
 // //     if (!team) return res.status(404).json({ message: "Team not found" });
-    
+
 // //     res.json(team);
 // //   } catch (err) {
 // //     res.status(500).json({ message: err.message });
@@ -76,7 +75,6 @@
 //     res.status(500).json({ message: err.message });
 //   }
 // };
-
 
 // // ---------------- UPDATE TEAM ----------------
 // exports.updateTeam = async (req, res) => {
@@ -198,8 +196,6 @@
 //   }
 // };
 
-
-
 // // ---------------- GET TEAM PLAYERS ----------------
 // exports.getTeamPlayers = async (req, res) => {
 //   try {
@@ -250,7 +246,6 @@
 //   }
 // };
 
-
 // exports.getJoinedTournaments = async (req, res) => {
 //   if (req.user.role !== "team") {
 //     return res.status(403).json({ message: "Access denied" });
@@ -289,7 +284,6 @@
 //   res.json(data);
 // };
 
-
 // teamController.js - IMPROVED VERSION
 const Team = require("../models/Team");
 const Player = require("../models/Player");
@@ -310,8 +304,8 @@ exports.createTeam = async (req, res) => {
     // Check if user already has a team
     const existingTeam = await Team.findOne({ createdBy: req.user.id });
     if (existingTeam) {
-      return res.status(400).json({ 
-        message: "You already have a team. Each user can create only one team." 
+      return res.status(400).json({
+        message: "You already have a team. Each user can create only one team.",
       });
     }
 
@@ -331,10 +325,15 @@ exports.createTeam = async (req, res) => {
     // Upload cover if provided
     if (req.files?.coverImage?.[0]) {
       try {
-        coverImageUrl = await uploadImage(req.files.coverImage[0].buffer, "teams");
+        coverImageUrl = await uploadImage(
+          req.files.coverImage[0].buffer,
+          "teams",
+        );
       } catch (uploadErr) {
         console.error("Cover upload failed:", uploadErr);
-        return res.status(500).json({ message: "Failed to upload cover image" });
+        return res
+          .status(500)
+          .json({ message: "Failed to upload cover image" });
       }
     }
 
@@ -355,8 +354,8 @@ exports.createTeam = async (req, res) => {
     });
   } catch (err) {
     console.error("Create team error:", err);
-    res.status(500).json({ 
-      message: err.message || "Failed to create team" 
+    res.status(500).json({
+      message: err.message || "Failed to create team",
     });
   }
 };
@@ -366,13 +365,11 @@ exports.getMyTeam = async (req, res) => {
   try {
     // Find team where user is either creator OR admin
     const team = await Team.findOne({
-      $or: [
-        { createdBy: req.user.id },
-        { admins: req.user.id }
-      ]
+      $or: [{ createdBy: req.user.id }, { admins: req.user.id }],
     }).populate({
       path: "players",
-      select: "name profileImageUrl position jerseyNumber age footed isFreeAgent"
+      select:
+        "name profileImageUrl position jerseyNumber age footed isFreeAgent",
     });
 
     // Return null if no team (frontend handles this)
@@ -388,9 +385,11 @@ exports.updateTeam = async (req, res) => {
   try {
     // Find team where user is admin
     const team = await Team.findOne({ admins: req.user.id });
-    
+
     if (!team) {
-      return res.status(404).json({ message: "Team not found or access denied" });
+      return res
+        .status(404)
+        .json({ message: "Team not found or access denied" });
     }
 
     const { teamName, description, location, foundedYear } = req.body;
@@ -402,7 +401,7 @@ exports.updateTeam = async (req, res) => {
       }
       team.teamName = teamName.trim();
     }
-    
+
     if (description !== undefined) team.description = description.trim();
     if (location !== undefined) team.location = location.trim();
     if (foundedYear !== undefined) {
@@ -416,7 +415,10 @@ exports.updateTeam = async (req, res) => {
     // Upload new logo if provided
     if (req.files?.teamLogo?.[0]) {
       try {
-        team.teamLogoUrl = await uploadImage(req.files.teamLogo[0].buffer, "teams");
+        team.teamLogoUrl = await uploadImage(
+          req.files.teamLogo[0].buffer,
+          "teams",
+        );
       } catch (uploadErr) {
         console.error("Logo upload failed:", uploadErr);
         return res.status(500).json({ message: "Failed to upload team logo" });
@@ -426,85 +428,100 @@ exports.updateTeam = async (req, res) => {
     // Upload new cover if provided
     if (req.files?.coverImage?.[0]) {
       try {
-        team.coverImageUrl = await uploadImage(req.files.coverImage[0].buffer, "teams");
+        team.coverImageUrl = await uploadImage(
+          req.files.coverImage[0].buffer,
+          "teams",
+        );
       } catch (uploadErr) {
         console.error("Cover upload failed:", uploadErr);
-        return res.status(500).json({ message: "Failed to upload cover image" });
+        return res
+          .status(500)
+          .json({ message: "Failed to upload cover image" });
       }
     }
 
     await team.save();
-    
+
     // Populate players before sending response
     await team.populate({
       path: "players",
-      select: "name profileImageUrl position jerseyNumber age footed isFreeAgent"
+      select:
+        "name profileImageUrl position jerseyNumber age footed isFreeAgent",
     });
 
-    res.json({ 
-      message: "Team updated successfully", 
-      team 
+    res.json({
+      message: "Team updated successfully",
+      team,
     });
   } catch (err) {
     console.error("Update team error:", err);
-    res.status(500).json({ 
-      message: err.message || "Failed to update team" 
+    res.status(500).json({
+      message: err.message || "Failed to update team",
     });
   }
 };
 
 // ---------------- ADD PLAYER ----------------
-exports.addPlayer = async (req, res) => {
+exports.addPlayer = async (req, res, next) => {
   try {
     const team = await Team.findOne({ admins: req.user.id });
     if (!team) {
-      return res.status(404).json({ message: "Team not found or access denied" });
+      return res
+        .status(404)
+        .json({ message: "Team not found or access denied" });
     }
 
     const { playerId } = req.body;
-    
     if (!playerId) {
       return res.status(400).json({ message: "Player ID is required" });
     }
 
-    const player = await Player.findById(playerId);
-
-    if (!player) {
-      return res.status(404).json({ message: "Player not found" });
-    }
-
-    if (!player.isFreeAgent) {
-      return res.status(400).json({ 
-        message: "Player is already part of another team" 
-      });
-    }
-
     // Check if player already in team
-    if (team.players.some(p => p.toString() === playerId)) {
+    if (team.players.some((p) => p.toString() === playerId)) {
       return res.status(400).json({ message: "Player already in team" });
     }
 
-    team.players.push(playerId);
-    player.teamId = team._id;
-    player.isFreeAgent = false;
+    // ✅ Atomic update — only succeeds if player is still a free agent
+    // If two requests hit simultaneously, only ONE will find isFreeAgent: true
+    const player = await Player.findOneAndUpdate(
+      {
+        _id: playerId,
+        isFreeAgent: true, // ← condition must be true to update
+      },
+      {
+        $set: {
+          teamId: team._id,
+          isFreeAgent: false,
+        },
+      },
+      { new: true },
+    );
 
+    // If null — player either doesn't exist or was already taken
+    if (!player) {
+      const exists = await Player.exists({ _id: playerId });
+      return res.status(400).json({
+        message: exists
+          ? "Player is already part of another team"
+          : "Player not found",
+      });
+    }
+
+    team.players.push(playerId);
     await team.save();
-    await player.save();
 
     await team.populate({
       path: "players",
-      select: "name profileImageUrl position jerseyNumber age footed isFreeAgent"
+      select:
+        "name profileImageUrl position jerseyNumber age footed isFreeAgent",
     });
 
-    res.json({ 
-      message: "Player added successfully", 
-      team 
+    res.json({
+      message: "Player added successfully",
+      team,
     });
   } catch (err) {
-    console.error("Add player error:", err);
-    res.status(500).json({ 
-      message: err.message || "Failed to add player" 
-    });
+    next(err);
   }
 };
 
@@ -513,7 +530,9 @@ exports.removePlayer = async (req, res) => {
   try {
     const team = await Team.findOne({ admins: req.user.id });
     if (!team) {
-      return res.status(404).json({ message: "Team not found or access denied" });
+      return res
+        .status(404)
+        .json({ message: "Team not found or access denied" });
     }
 
     const { playerId } = req.body;
@@ -523,7 +542,7 @@ exports.removePlayer = async (req, res) => {
     }
 
     // Check if player is in team
-    if (!team.players.some(p => p.toString() === playerId)) {
+    if (!team.players.some((p) => p.toString() === playerId)) {
       return res.status(400).json({ message: "Player not in team" });
     }
 
@@ -537,20 +556,21 @@ exports.removePlayer = async (req, res) => {
     }
 
     await team.save();
-    
+
     await team.populate({
       path: "players",
-      select: "name profileImageUrl position jerseyNumber age footed isFreeAgent"
+      select:
+        "name profileImageUrl position jerseyNumber age footed isFreeAgent",
     });
 
-    res.json({ 
-      message: "Player removed successfully", 
-      team 
+    res.json({
+      message: "Player removed successfully",
+      team,
     });
   } catch (err) {
     console.error("Remove player error:", err);
-    res.status(500).json({ 
-      message: err.message || "Failed to remove player" 
+    res.status(500).json({
+      message: err.message || "Failed to remove player",
     });
   }
 };
@@ -560,9 +580,9 @@ exports.getTeam = async (req, res) => {
   try {
     const team = await Team.findById(req.params.id).populate(
       "players",
-      "name profileImageUrl position jerseyNumber age footed isFreeAgent"
+      "name profileImageUrl position jerseyNumber age footed isFreeAgent",
     );
-    
+
     if (!team) {
       return res.status(404).json({ message: "Team not found" });
     }
@@ -583,11 +603,8 @@ exports.searchTeams = async (req, res) => {
       return res.status(400).json({ message: "Search query is required" });
     }
 
-    const myTeam = await Team.findOne({ 
-      $or: [
-        { createdBy: req.user.id },
-        { admins: req.user.id }
-      ]
+    const myTeam = await Team.findOne({
+      $or: [{ createdBy: req.user.id }, { admins: req.user.id }],
     });
 
     const teams = await Team.find({
@@ -608,7 +625,7 @@ exports.searchTeams = async (req, res) => {
 exports.getAllTeams = async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
-    
+
     const teams = await Team.find()
       .select("teamName teamLogoUrl location foundedYear")
       .sort({ createdAt: -1 })
@@ -623,8 +640,8 @@ exports.getAllTeams = async (req, res) => {
         page: parseInt(page),
         limit: parseInt(limit),
         total,
-        pages: Math.ceil(total / parseInt(limit))
-      }
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     });
   } catch (err) {
     console.error("Get all teams error:", err);
@@ -639,7 +656,8 @@ exports.getTeamPlayers = async (req, res) => {
 
     const team = await Team.findById(teamId).populate({
       path: "players",
-      select: "name profileImageUrl position jerseyNumber age footed isFreeAgent",
+      select:
+        "name profileImageUrl position jerseyNumber age footed isFreeAgent",
     });
 
     if (!team) {
@@ -661,14 +679,13 @@ exports.getTeamPlayers = async (req, res) => {
 exports.getMyTournaments = async (req, res) => {
   try {
     if (req.user.role !== "team") {
-      return res.status(403).json({ message: "Access denied. Team role required." });
+      return res
+        .status(403)
+        .json({ message: "Access denied. Team role required." });
     }
 
-    const team = await Team.findOne({ 
-      $or: [
-        { createdBy: req.user.id },
-        { admins: req.user.id }
-      ]
+    const team = await Team.findOne({
+      $or: [{ createdBy: req.user.id }, { admins: req.user.id }],
     });
 
     if (!team) {
@@ -689,53 +706,62 @@ exports.getMyTournaments = async (req, res) => {
 };
 
 // ---------------- GET JOINED TOURNAMENTS ----------------
-exports.getJoinedTournaments = async (req, res) => {
+exports.getJoinedTournaments = async (req, res, next) => {
   try {
     if (req.user.role !== "team") {
-      return res.status(403).json({ message: "Access denied. Team role required." });
+      return res.status(403).json({ message: "Access denied" });
     }
 
-    const team = await Team.findOne({ 
-      $or: [
-        { createdBy: req.user.id },
-        { admins: req.user.id }
-      ]
+    const team = await Team.findOne({
+      $or: [{ createdBy: req.user.id }, { admins: req.user.id }],
     });
+    if (!team) return res.status(404).json({ message: "Team not found" });
 
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-
-    const tournaments = await Tournament.find({
-      "teams.team": team._id,
-    })
+    const tournaments = await Tournament.find({ "teams.team": team._id })
       .populate("organiser", "name")
-      .sort({ startDate: 1 });
+      .sort({ startDate: 1 })
+      .lean();
 
-    const data = await Promise.all(
-      tournaments.map(async (t) => {
-        const upcomingMatches = await Match.countDocuments({
-          tournamentId: t._id,
+    if (tournaments.length === 0) return res.json([]);
+
+    const tournamentIds = tournaments.map((t) => t._id);
+
+    // ✅ Single aggregation instead of N queries
+    const matchCounts = await Match.aggregate([
+      {
+        $match: {
+          tournamentId: { $in: tournamentIds },
           status: { $in: ["PENDING", "ACCEPTED"] },
           $or: [{ homeTeam: team._id }, { awayTeam: team._id }],
-        });
+        },
+      },
+      {
+        $group: {
+          _id: "$tournamentId",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
 
-        return {
-          id: t._id,
-          name: t.name,
-          status: t.status,
-          startDate: t.startDate,
-          venue: t.venue,
-          organiser: t.organiser?.name,
-          upcomingMatches,
-        };
-      })
-    );
+    // Map counts by tournament ID for O(1) lookup
+    const countMap = matchCounts.reduce((acc, item) => {
+      acc[item._id.toString()] = item.count;
+      return acc;
+    }, {});
+
+    const data = tournaments.map((t) => ({
+      id: t._id,
+      name: t.name,
+      status: t.status,
+      startDate: t.startDate,
+      venue: t.venue,
+      organiser: t.organiser?.name,
+      upcomingMatches: countMap[t._id.toString()] || 0,
+    }));
 
     res.json(data);
   } catch (err) {
-    console.error("getJoinedTournaments error:", err);
-    res.status(500).json({ message: "Failed to load joined tournaments" });
+    next(err);
   }
 };
 

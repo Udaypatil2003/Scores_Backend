@@ -5,11 +5,24 @@ const jwt = require("jsonwebtoken");
 // ================= SIGNUP =================
 exports.signup = async (req, res) => {
   try {
-    const { name, mobile, password, role , email } = req.body;
+    const { name, mobile, password, role, email } = req.body;
 
-    // Check if user exists
-    const exists = await User.findOne({ mobile });
-    if (exists) return res.status(400).json({ message: "Mobile already registered" });
+    // Basic presence validation
+    if (!name || !mobile || !password || !email || !role) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // Check mobile duplicate
+    const mobileExists = await User.findOne({ mobile });
+    if (mobileExists) {
+      return res.status(400).json({ message: "Mobile already registered" });
+    }
+
+    // Check email duplicate
+    const emailExists = await User.findOne({ email });
+    if (emailExists) {
+      return res.status(400).json({ message: "Email already registered" });
+    }
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -23,6 +36,10 @@ exports.signup = async (req, res) => {
       role,
     });
 
+    // Remove password before sending
+    const userResponse = user.toObject();
+    delete userResponse.password;
+
     res.status(201).json({ message: "User created", user });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -30,7 +47,6 @@ exports.signup = async (req, res) => {
 };
 
 // ================= LOGIN =================
-// authController.js - Your current code is GOOD!
 exports.login = async (req, res) => {
   try {
     const { mobile, password } = req.body;
@@ -43,23 +59,21 @@ exports.login = async (req, res) => {
     const token = jwt.sign(
       {
         id: user._id,
-        name: user.name,  // ✅ This is already here - perfect!
+        name: user.name, // ✅ This is already here - perfect!
         mobile: user.mobile,
         role: user.role,
         email: user.email || "",
       },
       process.env.JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "7d" },
     );
 
     res.json({
       message: "Login Successful",
       token,
-      user,  // ✅ You're already sending user - perfect!
+      user,
     });
-
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
-

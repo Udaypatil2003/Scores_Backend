@@ -2,6 +2,7 @@ const Tournament = require("../models/Tournament");
 const Team = require("../models/Team");
 const Match = require("../models/Match");
 const mongoose = require("mongoose");
+const { isOrganiserOwner } = require("../utils/organiserHelper");
 
 // ---------------- CREATE TOURNAMENT ----------------
 exports.createTournament = async (req, res) => {
@@ -23,171 +24,218 @@ exports.createTournament = async (req, res) => {
       maxTeams,
     } = req.body;
 
+    // ✅ Required field checks
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: "Tournament name is required" });
+    }
+
+    if (!format) {
+      return res.status(400).json({ message: "Tournament format is required" });
+    }
+
+    if (!["KNOCKOUT", "LEAGUE"].includes(format)) {
+      return res
+        .status(400)
+        .json({ message: "Format must be KNOCKOUT or LEAGUE" });
+    }
+
+    if (!startDate) {
+      return res.status(400).json({ message: "Start date is required" });
+    }
+
+    if (!endDate) {
+      return res.status(400).json({ message: "End date is required" });
+    }
+
+    // ✅ Date logic checks
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const now = new Date();
+
+    if (isNaN(start.getTime())) {
+      return res.status(400).json({ message: "Invalid start date" });
+    }
+
+    if (isNaN(end.getTime())) {
+      return res.status(400).json({ message: "Invalid end date" });
+    }
+
+    if (start < now) {
+      return res
+        .status(400)
+        .json({ message: "Start date must be in the future" });
+    }
+
+    if (end <= start) {
+      return res
+        .status(400)
+        .json({ message: "End date must be after start date" });
+    }
+
+    // ✅ Optional field checks
+    if (entryFee !== undefined && (isNaN(entryFee) || entryFee < 0)) {
+      return res
+        .status(400)
+        .json({ message: "Entry fee must be a positive number" });
+    }
+
+    if (maxTeams !== undefined && (isNaN(maxTeams) || maxTeams < 2)) {
+      return res.status(400).json({ message: "Max teams must be at least 2" });
+    }
+
+    // ✅ Get organiser document
+    const Organiser = require("../models/Organiser");
+    const organiser = await Organiser.findOne({ user: req.user.id });
+    if (!organiser) {
+      return res.status(404).json({ message: "Organiser profile not found" });
+    }
+
     const tournament = await Tournament.create({
-      name,
-      description,
+      name: name.trim(),
+      description: description?.trim() || "",
       format,
-      startDate,
-      endDate,
-      venue,
-      entryFee,
-      maxTeams,
-      organiser: req.user.id,
+      startDate: start,
+      endDate: end,
+      venue: venue?.trim() || "",
+      entryFee: entryFee ?? 0,
+      maxTeams: maxTeams ?? null,
+      organiser: organiser._id, // ✅ correct organiser _id not user _id
     });
 
     res.status(201).json(tournament);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("Tournament create error:", err.message, err.errors);
+    res.status(500).json({ message: err.message, errors: err.errors }); // ✅ send errors too
   }
 };
 
-exports.openRegistration = async (req, res) => {
-  const tournament = await Tournament.findOne({
-    _id: req.params.id,
-    organiser: req.user.id,
-  });
+exports.openRegistration = async (req, res, next) => {
+  try {
+    const tournament = await Tournament.findById(req.params.id);
+    if (!tournament) {
+      return res.status(404).json({ message: "Tournament not found" });
+    }
 
-  if (!tournament)
-    return res.status(404).json({ message: "Tournament not found" });
+    const isOwner = await isOrganiserOwner(req.user.id, tournament.organiser);
+    if (!isOwner) {
+      return res.status(403).json({ message: "Access denied" });
+    }
 
-  tournament.status = "REGISTRATION_OPEN";
-  await tournament.save();
+    tournament.status = "REGISTRATION_OPEN";
+    await tournament.save();
 
-  res.json({ message: "Registration opened", tournament });
+    res.json({ message: "Registration opened", tournament });
+  } catch (err) {
+    next(err);
+  }
 };
 
-exports.closeRegistration = async (req, res) => {
-  const tournament = await Tournament.findOne({
-    _id: req.params.id,
-    organiser: req.user.id,
-  });
+exports.closeRegistration = async (req, res, next) => {
+  try {
+    const tournament = await Tournament.findById(req.params.id);
+    if (!tournament) {
+      return res.status(404).json({ message: "Tournament not found" });
+    }
 
-  if (!tournament)
-    return res.status(404).json({ message: "Tournament not found" });
+    const isOwner = await isOrganiserOwner(req.user.id, tournament.organiser);
+    if (!isOwner) {
+      return res.status(403).json({ message: "Access denied" });
+    }
 
-  tournament.status = "REGISTRATION_CLOSED";
-  await tournament.save();
+    tournament.status = "REGISTRATION_CLOSED";
+    await tournament.save();
 
-  res.json({ message: "Registration closed", tournament });
-};
-
-exports.openRegistration = async (req, res) => {
-  const tournament = await Tournament.findOne({
-    _id: req.params.id,
-    organiser: req.user.id,
-  });
-
-  if (!tournament)
-    return res.status(404).json({ message: "Tournament not found" });
-
-  tournament.status = "REGISTRATION_OPEN";
-  await tournament.save();
-
-  res.json({ message: "Registration opened", tournament });
-};
-
-exports.closeRegistration = async (req, res) => {
-  const tournament = await Tournament.findOne({
-    _id: req.params.id,
-    organiser: req.user.id,
-  });
-
-  if (!tournament)
-    return res.status(404).json({ message: "Tournament not found" });
-
-  tournament.status = "REGISTRATION_CLOSED";
-  await tournament.save();
-
-  res.json({ message: "Registration closed", tournament });
+    res.json({ message: "Registration closed", tournament });
+  } catch (err) {
+    next(err);
+  }
 };
 
 exports.joinTournament = async (req, res) => {
-  if (req.user.role !== "team") {
-    return res.status(403).json({ message: "Only teams can join tournaments" });
-  }
+  try {
+    if (req.user.role !== "team") {
+      return res
+        .status(403)
+        .json({ message: "Only teams can join tournaments" });
+    }
 
-  const tournament = await Tournament.findById(req.params.id);
-  if (!tournament)
-    return res.status(404).json({ message: "Tournament not found" });
+    const tournament = await Tournament.findById(req.params.id);
+    if (!tournament) {
+      return res.status(404).json({ message: "Tournament not found" });
+    }
 
-  if (tournament.status !== "REGISTRATION_OPEN") {
-    return res.status(400).json({ message: "Registration is closed" });
-  }
+    if (tournament.status !== "REGISTRATION_OPEN") {
+      return res.status(400).json({ message: "Registration is closed" });
+    }
 
-  const team = await Team.findOne({ createdBy: req.user.id });
-  if (!team) return res.status(404).json({ message: "Team not found" });
+    const team = await Team.findOne({ createdBy: req.user.id });
+    if (!team) {
+      return res.status(404).json({ message: "Team not found" });
+    }
 
-  const alreadyJoined = tournament.teams.some(
-    (t) => t.team.toString() === team._id.toString(),
-  );
+    const alreadyJoined = tournament.teams.some(
+      (t) => t.team.toString() === team._id.toString(),
+    );
+    if (alreadyJoined) {
+      return res.status(400).json({ message: "Team already registered" });
+    }
 
-  if (alreadyJoined) {
-    return res.status(400).json({ message: "Team already registered" });
-  }
-
-  // Date clash check
-  const clash = await Match.findOne({
-    $or: [{ homeTeam: team._id }, { awayTeam: team._id }],
-    scheduledAt: {
-      $gte: tournament.startDate,
-      $lte: tournament.endDate,
-    },
-    status: { $in: ["ACCEPTED", "LIVE"] },
-  });
-
-  if (clash) {
-    return res.status(400).json({
-      message: "Team has another match/tournament during these dates",
+    // Date clash check
+    const clash = await Match.findOne({
+      $or: [{ homeTeam: team._id }, { awayTeam: team._id }],
+      scheduledAt: {
+        $gte: tournament.startDate,
+        $lte: tournament.endDate,
+      },
+      status: { $in: ["ACCEPTED", "LIVE"] },
     });
+
+    if (clash) {
+      return res.status(400).json({
+        message: "Team has another match/tournament during these dates",
+      });
+    }
+
+    if (tournament.maxTeams && tournament.teams.length >= tournament.maxTeams) {
+      return res.status(400).json({ message: "Tournament is full" });
+    }
+
+    tournament.teams.push({ team: team._id });
+    await tournament.save();
+
+    res.json({ message: "Joined tournament", tournament });
+  } catch (err) {
+    console.error("joinTournament error:", err);
+    res.status(500).json({ message: "Failed to join tournament" });
   }
-
-  if (tournament.maxTeams && tournament.teams.length >= tournament.maxTeams) {
-    return res.status(400).json({ message: "Tournament is full" });
-  }
-
-  tournament.teams.push({ team: team._id });
-  await tournament.save();
-
-  res.json({ message: "Joined tournament", tournament });
 };
 
 // ================= End Tournament (FULLY FIXED) =================
-exports.endTournament = async (req, res) => {
+exports.endTournament = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // Find tournament - organiser might be ObjectId or populated object
     const tournament = await Tournament.findById(id).populate(
-      "teams.team",
-      "teamName teamLogoUrl",
+      "teams.team", "teamName teamLogoUrl",
     );
 
     if (!tournament) {
       return res.status(404).json({ message: "Tournament not found" });
     }
 
-    // ==================== PERMISSION CHECK ====================
-    const isOrganiser = req.user.role === "organiser";
-
-    // ⭐ FIXED: Handle both ObjectId and populated organiser
-    const organiserId =
-      typeof tournament.organiser === "object"
-        ? tournament.organiser._id.toString()
-        : tournament.organiser.toString();
-
-    const isTournamentOrganiser = organiserId === req.user.id;
-
-    if (!isOrganiser || !isTournamentOrganiser) {
-      return res.status(403).json({
-        message: "Only tournament organiser can end the tournament",
-      });
+    // ✅ Clean permission check using helper
+    if (req.user.role !== "organiser") {
+      return res.status(403).json({ message: "Only organisers can end tournaments" });
     }
 
-    // ==================== STATUS VALIDATION ====================
+    const isOwner = await isOrganiserOwner(req.user.id, tournament.organiser);
+    if (!isOwner) {
+      return res.status(403).json({ message: "Only tournament organiser can end the tournament" });
+    }
+
+    // rest of your existing endTournament logic stays exactly the same...
     if (tournament.status === "COMPLETED") {
-      return res.status(400).json({
-        message: "Tournament is already completed",
-      });
+      return res.status(400).json({ message: "Tournament is already completed" });
     }
 
     if (!["LIVE", "FIXTURES_GENERATED"].includes(tournament.status)) {
@@ -196,13 +244,10 @@ exports.endTournament = async (req, res) => {
       });
     }
 
-    // ==================== CHECK ALL MATCHES COMPLETED ====================
-    const tournamentMatches = await Match.find({
-      tournamentId: tournament._id,
-    });
+    const tournamentMatches = await Match.find({ tournamentId: tournament._id });
 
     const incompleteMatches = tournamentMatches.filter(
-      (m) => m.status !== "COMPLETED" && m.status !== "CANCELLED",
+      m => m.status !== "COMPLETED" && m.status !== "CANCELLED",
     );
 
     if (incompleteMatches.length > 0) {
@@ -212,40 +257,25 @@ exports.endTournament = async (req, res) => {
       });
     }
 
-    // ==================== DETERMINE WINNER ====================
     let winner = null;
 
     if (tournament.format === "KNOCKOUT") {
-      // Find the final match (highest round number)
       const finalMatch = tournamentMatches
-        .filter((m) => m.status === "COMPLETED")
+        .filter(m => m.status === "COMPLETED")
         .sort((a, b) => b.round - a.round)[0];
 
-      if (finalMatch && finalMatch.winner) {
-        winner = finalMatch.winner;
-      }
+      if (finalMatch?.winner) winner = finalMatch.winner;
     }
 
     if (tournament.format === "LEAGUE") {
-      // Get standings to determine winner
-      const standings = await calculateLeagueStandings(
-        tournament._id,
-        tournamentMatches,
-      );
-
-      if (standings && standings.length > 0) {
-        winner = standings[0].team._id; // Top team wins
-      }
+      const standings = await calculateLeagueStandings(tournament._id, tournamentMatches);
+      if (standings?.length > 0) winner = standings[0].team._id;
     }
 
-    // ==================== UPDATE TOURNAMENT STATUS ====================
     tournament.status = "COMPLETED";
     tournament.winner = winner;
     tournament.completedAt = new Date();
-
     await tournament.save();
-
-    // ==================== POPULATE WINNER FOR RESPONSE ====================
     await tournament.populate("winner", "teamName teamLogoUrl");
 
     return res.json({
@@ -258,17 +288,11 @@ exports.endTournament = async (req, res) => {
         completedAt: tournament.completedAt,
         format: tournament.format,
         totalMatches: tournamentMatches.length,
-        completedMatches: tournamentMatches.filter(
-          (m) => m.status === "COMPLETED",
-        ).length,
+        completedMatches: tournamentMatches.filter(m => m.status === "COMPLETED").length,
       },
     });
-  } catch (error) {
-    console.error("END TOURNAMENT ERROR:", error);
-    return res.status(500).json({
-      message: "Failed to end tournament",
-      error: error.message,
-    });
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -355,21 +379,18 @@ async function calculateLeagueStandings(tournamentId, matches) {
   return standings;
 }
 
-exports.getTournamentMatches = async (req, res) => {
+exports.getTournamentMatches = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // Verify tournament exists and user is organiser
     const tournament = await Tournament.findById(id);
-
     if (!tournament) {
       return res.status(404).json({ message: "Tournament not found" });
     }
 
-    // Only organiser or participating teams can view matches
     const isOrganiser =
       req.user.role === "organiser" &&
-      tournament.organiser.toString() === req.user.id;
+      (await isOrganiserOwner(req.user.id, tournament.organiser));
 
     const isTeamParticipant = req.user.role === "team";
 
@@ -377,7 +398,6 @@ exports.getTournamentMatches = async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    // Get all matches for this tournament
     const matches = await Match.find({ tournamentId: id })
       .populate("homeTeam", "teamName teamLogoUrl")
       .populate("awayTeam", "teamName teamLogoUrl")
@@ -385,7 +405,6 @@ exports.getTournamentMatches = async (req, res) => {
       .sort({ round: 1, scheduledAt: 1 })
       .lean();
 
-    // If team user, only show matches they're involved in
     if (isTeamParticipant) {
       const team = await Team.findOne({ createdBy: req.user.id });
       if (!team) {
@@ -393,7 +412,7 @@ exports.getTournamentMatches = async (req, res) => {
       }
 
       const teamMatches = matches.filter(
-        (m) =>
+        m =>
           m.homeTeam._id.toString() === team._id.toString() ||
           m.awayTeam._id.toString() === team._id.toString(),
       );
@@ -401,11 +420,9 @@ exports.getTournamentMatches = async (req, res) => {
       return res.json(teamMatches);
     }
 
-    // Organiser sees all matches
     res.json(matches);
   } catch (err) {
-    console.error("Get tournament matches error:", err);
-    res.status(500).json({ message: "Failed to load tournament matches" });
+    next(err);
   }
 };
 

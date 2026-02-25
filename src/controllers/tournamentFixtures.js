@@ -4,38 +4,55 @@ const Tournament = require("../models/Tournament");
 const Team = require("../models/Team");
 const Match = require("../models/Match");
 const mongoose = require("mongoose");
+const { isOrganiserOwner } = require("../utils/organiserHelper");
 
 // ================= GENERATE FIXTURES =================
-exports.generateFixtures = async (req, res) => {
+exports.generateFixtures = async (req, res, next) => {
   try {
     const { id } = req.params;
-    
-    // Verify organiser owns tournament
-    const tournament = await Tournament.findOne({
-      _id: id,
-      organiser: req.user.id,
-    }).populate("teams.team");
 
+    const tournament = await Tournament.findById(id).populate("teams.team");
     if (!tournament) {
       return res.status(404).json({ message: "Tournament not found" });
     }
 
+    const isOwner = await isOrganiserOwner(req.user.id, tournament.organiser);
+    if (!isOwner) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
     if (tournament.status !== "REGISTRATION_CLOSED") {
-      return res.status(400).json({ 
-        message: "Close registration first before generating fixtures" 
+      return res.status(400).json({
+        message: "Close registration first before generating fixtures",
       });
     }
 
-    const teams = tournament.teams.map(t => t.team);
-    
+    // ✅ Guard — check if any matches already played
+    const hasActiveMatches = await Match.exists({
+      tournamentId: tournament._id,
+      status: { $in: ["LIVE", "COMPLETED"] },
+    });
+
+    if (hasActiveMatches) {
+      return res.status(400).json({
+        message:
+          "Cannot regenerate fixtures — matches already in progress or completed",
+      });
+    }
+
+    const teams = tournament.teams.map((t) => t.team);
+
     if (teams.length < 2) {
-      return res.status(400).json({ 
-        message: "Need at least 2 teams to generate fixtures" 
+      return res.status(400).json({
+        message: "Need at least 2 teams to generate fixtures",
       });
     }
 
-    // Delete any existing fixtures for this tournament
-    await Match.deleteMany({ tournamentId: tournament._id });
+    // ✅ Safe to delete only PENDING fixtures
+    await Match.deleteMany({
+      tournamentId: tournament._id,
+      status: "PENDING",
+    });
 
     let matches;
     let fixtureType;
@@ -50,7 +67,6 @@ exports.generateFixtures = async (req, res) => {
       return res.status(400).json({ message: "Invalid tournament format" });
     }
 
-    // Insert all matches
     await Match.insertMany(matches);
 
     tournament.status = "FIXTURES_GENERATED";
@@ -60,37 +76,35 @@ exports.generateFixtures = async (req, res) => {
       message: "Fixtures generated successfully",
       fixtureType,
       totalMatches: matches.length,
-      totalRounds: tournament.format === "KNOCKOUT" 
-        ? Math.ceil(Math.log2(teams.length))
-        : teams.length - 1,
+      totalRounds:
+        tournament.format === "KNOCKOUT"
+          ? Math.ceil(Math.log2(teams.length))
+          : teams.length - 1,
     });
-
   } catch (err) {
     console.error("Generate fixtures error:", err);
-    res.status(500).json({ 
-      message: err.message || "Failed to generate fixtures" 
-    });
+    next(err);
   }
 };
 
 // ================= KNOCKOUT FIXTURE GENERATOR =================
 function generateKnockoutFixtures(tournament, teams, organiserId) {
   const matches = [];
-  
+
   // Shuffle teams for random draw
   const shuffledTeams = [...teams].sort(() => Math.random() - 0.5);
-  
+
   // Calculate first round matches
   const numTeams = shuffledTeams.length;
   const nextPowerOf2 = Math.pow(2, Math.ceil(Math.log2(numTeams)));
   const byes = nextPowerOf2 - numTeams;
-  
+
   let round = 1;
   let matchDate = new Date(tournament.startDate);
-  
+
   // First round
   const firstRoundTeams = shuffledTeams.slice(0, numTeams - byes);
-  
+
   for (let i = 0; i < firstRoundTeams.length; i += 2) {
     if (firstRoundTeams[i + 1]) {
       matches.push({
@@ -107,34 +121,36 @@ function generateKnockoutFixtures(tournament, teams, organiserId) {
       });
     }
   }
-  
+
   return matches;
 }
 
 function generateLeagueFixtures(tournament, teams, organiserId) {
   const matches = [];
   const numTeams = teams.length;
-  
+
   // If odd number of teams, add a "BYE" placeholder
-  const teamsForRobin = numTeams % 2 === 0 
-    ? [...teams] 
-    : [...teams, null];
-  
+  const teamsForRobin = numTeams % 2 === 0 ? [...teams] : [...teams, null];
+
   const totalRounds = teamsForRobin.length - 1;
   const matchesPerRound = Math.floor(teamsForRobin.length / 2);
-  
+
   let matchDate = new Date(tournament.startDate);
-  
+
   for (let round = 0; round < totalRounds; round++) {
     for (let match = 0; match < matchesPerRound; match++) {
       const home = (round + match) % (teamsForRobin.length - 1);
-      const away = (teamsForRobin.length - 1 - match + round) % (teamsForRobin.length - 1);
-      
+      const away =
+        (teamsForRobin.length - 1 - match + round) % (teamsForRobin.length - 1);
+
       // Last team stays in place, rotates opponent
-      const homeTeam = match === 0 ? teamsForRobin[teamsForRobin.length - 1] : teamsForRobin[home];
+      const homeTeam =
+        match === 0
+          ? teamsForRobin[teamsForRobin.length - 1]
+          : teamsForRobin[home];
       const awayTeam = teamsForRobin[away];
-      
-      // Skip if either team is null 
+
+      // Skip if either team is null
       if (homeTeam && awayTeam) {
         matches.push({
           createdBy: organiserId,
@@ -150,29 +166,28 @@ function generateLeagueFixtures(tournament, teams, organiserId) {
         });
       }
     }
-    
+
     // Move to next week for next round
+    matchDate = new Date(matchDate);
     matchDate.setDate(matchDate.getDate() + 7);
   }
-  
+
   return matches;
 }
 
 // ================= GET TOURNAMENT FIXTURES =================
-exports.getTournamentFixtures = async (req, res) => {
+exports.getTournamentFixtures = async (req, res, next) => {
   try {
     const { id } = req.params;
 
     const tournament = await Tournament.findById(id);
-    
     if (!tournament) {
       return res.status(404).json({ message: "Tournament not found" });
     }
 
-    // Only organiser can view fixtures before they're public
-    const isOrganiser = 
-      req.user.role === "organiser" && 
-      tournament.organiser.toString() === req.user.id;
+    const isOrganiser =
+      req.user.role === "organiser" &&
+      (await isOrganiserOwner(req.user.id, tournament.organiser));
 
     const isTeam = req.user.role === "team";
 
@@ -180,21 +195,16 @@ exports.getTournamentFixtures = async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    // Get all matches grouped by round
     const matches = await Match.find({ tournamentId: id })
       .populate("homeTeam", "teamName teamLogoUrl")
       .populate("awayTeam", "teamName teamLogoUrl")
       .sort({ round: 1, scheduledAt: 1 })
       .lean();
 
-    // Group by round
     const fixturesByRound = {};
-    
-    matches.forEach(match => {
+    matches.forEach((match) => {
       const roundKey = match.round || 1;
-      if (!fixturesByRound[roundKey]) {
-        fixturesByRound[roundKey] = [];
-      }
+      if (!fixturesByRound[roundKey]) fixturesByRound[roundKey] = [];
       fixturesByRound[roundKey].push(match);
     });
 
@@ -209,45 +219,43 @@ exports.getTournamentFixtures = async (req, res) => {
       totalMatches: matches.length,
       totalRounds: Object.keys(fixturesByRound).length,
     });
-
   } catch (err) {
-    console.error("Get tournament fixtures error:", err);
-    res.status(500).json({ message: "Failed to load fixtures" });
+    next(err);
   }
 };
-
 // ================= MANUAL SEEDING =================
 exports.updateSeeding = async (req, res) => {
   try {
     const { id } = req.params;
-    const { seeding } = req.body; // Array of team IDs in order
+    const { seeding } = req.body;
 
-    const tournament = await Tournament.findOne({
-      _id: id,
-      organiser: req.user.id,
-    });
-
+    const tournament = await Tournament.findById(id);
     if (!tournament) {
       return res.status(404).json({ message: "Tournament not found" });
     }
 
+    const isOwner = await isOrganiserOwner(req.user.id, tournament.organiser);
+    if (!isOwner) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
     if (tournament.status !== "REGISTRATION_CLOSED") {
-      return res.status(400).json({ 
-        message: "Can only update seeding after registration closes" 
+      return res.status(400).json({
+        message: "Can only update seeding after registration closes",
       });
     }
 
     // Validate seeding array
     if (!Array.isArray(seeding) || seeding.length !== tournament.teams.length) {
-      return res.status(400).json({ 
-        message: "Invalid seeding. Must include all teams exactly once." 
+      return res.status(400).json({
+        message: "Invalid seeding. Must include all teams exactly once.",
       });
     }
 
     // Reorder teams array
-    const newTeamsOrder = seeding.map(teamId => {
+    const newTeamsOrder = seeding.map((teamId) => {
       const teamEntry = tournament.teams.find(
-        t => t.team.toString() === teamId.toString()
+        (t) => t.team.toString() === teamId.toString(),
       );
       if (!teamEntry) {
         throw new Error(`Team ${teamId} not found in tournament`);
@@ -258,15 +266,14 @@ exports.updateSeeding = async (req, res) => {
     tournament.teams = newTeamsOrder;
     await tournament.save();
 
-    res.json({ 
+    res.json({
       message: "Seeding updated successfully",
       teams: newTeamsOrder,
     });
-
   } catch (err) {
     console.error("Update seeding error:", err);
-    res.status(500).json({ 
-      message: err.message || "Failed to update seeding" 
+    res.status(500).json({
+      message: err.message || "Failed to update seeding",
     });
   }
 };
@@ -276,38 +283,38 @@ exports.startTournament = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const tournament = await Tournament.findOne({
-      _id: id,
-      organiser: req.user.id,
-    });
-
+    const tournament = await Tournament.findById(id);
     if (!tournament) {
       return res.status(404).json({ message: "Tournament not found" });
     }
 
+    const isOwner = await isOrganiserOwner(req.user.id, tournament.organiser);
+    if (!isOwner) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
     if (tournament.status !== "FIXTURES_GENERATED") {
-      return res.status(400).json({ 
-        message: "Generate fixtures before starting tournament" 
+      return res.status(400).json({
+        message: "Generate fixtures before starting tournament",
       });
     }
 
     // Check if there are matches
     const matchCount = await Match.countDocuments({ tournamentId: id });
-    
+
     if (matchCount === 0) {
-      return res.status(400).json({ 
-        message: "No fixtures found. Generate fixtures first." 
+      return res.status(400).json({
+        message: "No fixtures found. Generate fixtures first.",
       });
     }
 
     tournament.status = "LIVE";
     await tournament.save();
 
-    res.json({ 
+    res.json({
       message: "Tournament started successfully",
       tournament,
     });
-
   } catch (err) {
     console.error("Start tournament error:", err);
     res.status(500).json({ message: "Failed to start tournament" });
@@ -315,69 +322,75 @@ exports.startTournament = async (req, res) => {
 };
 
 // ================= ADVANCE KNOCKOUT ROUND =================
-exports.advanceKnockoutRound = async (req, res) => {
+exports.advanceKnockoutRound = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const tournament = await Tournament.findOne({
-      _id: id,
-      organiser: req.user.id,
-    });
-
+    const tournament = await Tournament.findById(id);
     if (!tournament) {
       return res.status(404).json({ message: "Tournament not found" });
     }
 
+    const isOwner = await isOrganiserOwner(req.user.id, tournament.organiser);
+    if (!isOwner) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
     if (tournament.format !== "KNOCKOUT") {
-      return res.status(400).json({ 
-        message: "This endpoint is only for knockout tournaments" 
+      return res.status(400).json({
+        message: "This endpoint is only for knockout tournaments",
       });
     }
 
-    // Get current round matches
-    const currentRound = await Match.find({ 
-      tournamentId: id 
-    })
+    // Get latest round number
+    const latestRoundDoc = await Match.findOne({ tournamentId: id })
       .sort({ round: -1 })
-      .limit(1)
       .select("round");
 
-    if (!currentRound.length) {
+    if (!latestRoundDoc) {
       return res.status(400).json({ message: "No matches found" });
     }
 
-    const latestRound = currentRound[0].round;
+    const latestRound = latestRoundDoc.round;
 
-    // Check if all matches in current round are completed
+    // Check all matches in current round are completed
     const roundMatches = await Match.find({
       tournamentId: id,
       round: latestRound,
     });
 
-    const allCompleted = roundMatches.every(m => m.status === "COMPLETED");
-
+    const allCompleted = roundMatches.every((m) => m.status === "COMPLETED");
     if (!allCompleted) {
-      return res.status(400).json({ 
-        message: "All matches in current round must be completed first" 
+      return res.status(400).json({
+        message: "All matches in current round must be completed first",
       });
     }
 
     // Get winners
-    const winners = roundMatches
-      .filter(m => m.winner)
-      .map(m => m.winner);
+    const winners = roundMatches.filter((m) => m.winner).map((m) => m.winner);
 
     if (winners.length < 2) {
-      return res.status(400).json({ 
-        message: "Not enough winners to create next round" 
+      // Only one winner left — tournament should be ended
+      return res.status(400).json({
+        message: "Only one team remaining. End the tournament instead.",
       });
     }
+
+    // ✅ Find the latest scheduledAt across ALL current round matches
+    // then add 7 days to that — not just taking [0]
+    const latestMatchDate = roundMatches.reduce((latest, m) => {
+      return new Date(m.scheduledAt) > latest
+        ? new Date(m.scheduledAt)
+        : latest;
+    }, new Date(roundMatches[0].scheduledAt));
+
+    // ✅ Create a NEW Date object — never mutate the original
+    const nextRoundDate = new Date(latestMatchDate);
+    nextRoundDate.setDate(nextRoundDate.getDate() + 7);
 
     // Create next round matches
     const nextRound = latestRound + 1;
     const nextMatches = [];
-    const matchDate = new Date(roundMatches[0].scheduledAt);
-    matchDate.setDate(matchDate.getDate() + 7); // Week later
 
     for (let i = 0; i < winners.length; i += 2) {
       if (winners[i + 1]) {
@@ -386,7 +399,7 @@ exports.advanceKnockoutRound = async (req, res) => {
           createdByRole: "organiser",
           homeTeam: winners[i],
           awayTeam: winners[i + 1],
-          scheduledAt: new Date(matchDate),
+          scheduledAt: new Date(nextRoundDate), // ✅ fresh Date per match
           status: "PENDING",
           tournamentId: tournament._id,
           round: nextRound,
@@ -396,27 +409,23 @@ exports.advanceKnockoutRound = async (req, res) => {
       }
     }
 
-    if (nextMatches.length > 0) {
-      await Match.insertMany(nextMatches);
+    if (nextMatches.length === 0) {
+      return res.status(400).json({
+        message: "Could not create next round matches",
+      });
     }
 
-    // Check if this was the final
-    if (nextMatches.length === 0 && winners.length === 1) {
-      tournament.status = "COMPLETED";
-      await tournament.save();
-    }
+    await Match.insertMany(nextMatches);
 
     res.json({
-      message: nextMatches.length > 0 
-        ? `Round ${nextRound} created with ${nextMatches.length} matches`
-        : "Tournament completed",
-      nextRound: nextMatches.length > 0 ? nextRound : null,
+      message: `Round ${nextRound} created with ${nextMatches.length} matches`,
+      nextRound,
       matchesCreated: nextMatches.length,
+      scheduledDate: nextRoundDate,
     });
-
   } catch (err) {
     console.error("Advance round error:", err);
-    res.status(500).json({ message: "Failed to advance round" });
+    next(err);
   }
 };
 
@@ -432,8 +441,8 @@ exports.getStandings = async (req, res) => {
     }
 
     if (tournament.format !== "LEAGUE") {
-      return res.status(400).json({ 
-        message: "Standings only available for league tournaments" 
+      return res.status(400).json({
+        message: "Standings only available for league tournaments",
       });
     }
 
@@ -446,7 +455,7 @@ exports.getStandings = async (req, res) => {
     // Calculate standings
     const standings = {};
 
-    tournament.teams.forEach(t => {
+    tournament.teams.forEach((t) => {
       standings[t.team._id] = {
         team: t.team,
         played: 0,
@@ -460,7 +469,7 @@ exports.getStandings = async (req, res) => {
       };
     });
 
-    matches.forEach(match => {
+    matches.forEach((match) => {
       const homeId = match.homeTeam.toString();
       const awayId = match.awayTeam.toString();
 
@@ -508,14 +517,14 @@ exports.getStandings = async (req, res) => {
     });
 
     // Calculate goal difference and sort
-    const standingsArray = Object.values(standings).map(s => ({
+    const standingsArray = Object.values(standings).map((s) => ({
       ...s,
       goalDifference: s.goalsFor - s.goalsAgainst,
     }));
 
     standingsArray.sort((a, b) => {
       if (b.points !== a.points) return b.points - a.points;
-      if (b.goalDifference !== a.goalDifference) 
+      if (b.goalDifference !== a.goalDifference)
         return b.goalDifference - a.goalDifference;
       return b.goalsFor - a.goalsFor;
     });
@@ -528,7 +537,6 @@ exports.getStandings = async (req, res) => {
       },
       standings: standingsArray,
     });
-
   } catch (err) {
     console.error("Get standings error:", err);
     res.status(500).json({ message: "Failed to load standings" });

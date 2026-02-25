@@ -155,17 +155,22 @@ exports.getMyTournaments = async (req, res) => {
       });
     }
 
+    // Step 1: get the Organiser document from User ID
+    const organiser = await Organiser.findOne({ user: req.user.id });
+    if (!organiser) {
+      return res.status(404).json({ message: "Organiser profile not found" });
+    }
+
+    // Step 2: query tournaments using Organiser _id
     const tournaments = await Tournament.find({
-      organiser: req.user.id,
+      organiser: organiser._id, // ← correct
     })
       .sort({ createdAt: -1 })
       .populate("organiser", "name");
 
     res.json(tournaments);
   } catch (err) {
-    res.status(500).json({
-      message: err.message,
-    });
+    res.status(500).json({ message: err.message });
   }
 };
 

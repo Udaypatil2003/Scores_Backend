@@ -2,6 +2,8 @@ const Match = require("../models/Match");
 const Team = require("../models/Team");
 const mongoose = require("mongoose");
 const Player = require("../models/Player");
+const { endMatchAndUpdateStats } = require("../services/matchService");
+const {paginate, paginateResponse} = require("../utils/paginate");
 
 const isPlayerInStartingXI = (lineup, playerId) =>
   lineup.starting.some((s) => s.player && s.player.toString() === playerId);
@@ -19,7 +21,6 @@ exports.cancelMatch = async (req, res) => {
     }
 
     const match = await Match.findById(matchId);
-
     if (!match) {
       return res.status(404).json({ message: "Match not found" });
     }
@@ -31,19 +32,17 @@ exports.cancelMatch = async (req, res) => {
         .json({ message: "Only match creator can cancel this match" });
     }
 
-    if (match.status === "COMPLETED") {
-      return res
-        .status(400)
-        .json({ message: "Completed matches cannot be cancelled" });
+    const nonCancellableStatuses = ["COMPLETED", "LIVE", "CANCELLED"];
+    if (nonCancellableStatuses.includes(match.status)) {
+      return res.status(400).json({
+        message: `Cannot cancel a match with status: ${match.status}`,
+      });
     }
 
     match.status = "CANCELLED";
     await match.save();
 
-    res.json({
-      message: "Match cancelled successfully",
-      match,
-    });
+    res.json({ message: "Match cancelled successfully", match });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -65,6 +64,7 @@ exports.createMatch = async (req, res) => {
       format,
       matchType,
       homeOrAway,
+      notes, // ── NEW
     } = req.body;
 
     if (!opponentTeamId || !scheduledAt || !homeOrAway) {
@@ -96,7 +96,6 @@ exports.createMatch = async (req, res) => {
     }
 
     const homeTeam = homeOrAway === "HOME" ? myTeam._id : opponentTeam._id;
-
     const awayTeam = homeOrAway === "HOME" ? opponentTeam._id : myTeam._id;
 
     if (!myTeam.savedLineup) {
@@ -106,7 +105,6 @@ exports.createMatch = async (req, res) => {
     }
 
     const lineups = {};
-
     lineups[homeOrAway === "HOME" ? "home" : "away"] = {
       formation: myTeam.savedLineup.formation,
       starting: Array.isArray(myTeam.savedLineup.starting)
@@ -127,8 +125,9 @@ exports.createMatch = async (req, res) => {
       venue,
       format,
       matchType,
+      notes: notes || "", // ── NEW
       status: "PENDING",
-      lineups, // ✅ always exists now
+      lineups,
     });
 
     res.status(201).json({
@@ -251,61 +250,64 @@ exports.respondToMatch = async (req, res) => {
 };
 
 // ================= GET MY MATCHES (TEAM DASHBOARD) =================
-// ================= GET MY MATCHES (TEAM DASHBOARD) =================
-exports.getMyMatches = async (req, res) => {
+exports.getMyMatches = async (req, res, next) => {
   try {
-
-    let matches = [];
+    const { page, limit, skip } = paginate(req.query);
 
     if (req.user.role === "team") {
-      // ==================== TEAM OWNERS ====================
       const myTeam = await Team.findOne({ createdBy: req.user.id });
       if (!myTeam) {
         return res.status(404).json({ message: "Your team not found" });
       }
 
-      matches = await Match.find({
+      const filter = {
         $or: [{ homeTeam: myTeam._id }, { awayTeam: myTeam._id }],
-      })
-        .populate("homeTeam", "teamName teamLogoUrl")
-        .populate("awayTeam", "teamName teamLogoUrl")
-        .sort({ scheduledAt: -1 }); // Most recent first
-    } else if (req.user.role === "player") {
-      // ==================== PLAYERS ====================
-      const player = await Player.findOne({ userId: req.user.id });
+      };
 
+      const [matches, total] = await Promise.all([
+        Match.find(filter)
+          .populate("homeTeam", "teamName teamLogoUrl")
+          .populate("awayTeam", "teamName teamLogoUrl")
+          .sort({ scheduledAt: -1 })
+          .skip(skip)
+          .limit(limit),
+        Match.countDocuments(filter),
+      ]);
+
+      return res.json(paginateResponse(matches, total, page, limit));
+
+    } else if (req.user.role === "player") {
+      const player = await Player.findOne({ userId: req.user.id });
       if (!player) {
         return res.status(404).json({ message: "Player profile not found" });
       }
 
-
-      // Find matches where player is in starting XI or bench
-      matches = await Match.find({
+      const filter = {
         $or: [
-          // Player in home team starting XI
           { "lineups.home.starting.player": player._id },
-          // Player in home team bench
           { "lineups.home.bench": player._id },
-          // Player in away team starting XI
           { "lineups.away.starting.player": player._id },
-          // Player in away team bench
           { "lineups.away.bench": player._id },
         ],
-      })
-        .populate("homeTeam", "teamName teamLogoUrl")
-        .populate("awayTeam", "teamName teamLogoUrl")
-        .sort({ scheduledAt: -1 });
+      };
 
-    } else {
-      return res.status(403).json({
-        message: "Access denied. Only team owners and players can view matches",
-      });
+      const [matches, total] = await Promise.all([
+        Match.find(filter)
+          .populate("homeTeam", "teamName teamLogoUrl")
+          .populate("awayTeam", "teamName teamLogoUrl")
+          .sort({ scheduledAt: -1 })
+          .skip(skip)
+          .limit(limit),
+        Match.countDocuments(filter),
+      ]);
+
+      return res.json(paginateResponse(matches, total, page, limit));
     }
 
-    res.json(matches);
-  } catch (error) {
-    console.error("💥 Error in getMyMatches:", error);
-    res.status(500).json({ message: error.message });
+    return res.status(403).json({ message: "Access denied" });
+
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -448,7 +450,147 @@ exports.startMatch = async (req, res) => {
 };
 
 // =================  match event =================
-exports.addMatchEvent = async (req, res) => {
+// exports.addMatchEvent = async (req, res) => {
+//   try {
+//     const matchId = req.params.id;
+//     const { minute, teamId, goal, substitution, card } = req.body;
+
+//     if (minute === undefined || minute === null || !teamId) {
+//       return res
+//         .status(400)
+//         .json({ message: "Minute and teamId are required" });
+//     }
+
+//     const match = await Match.findById(matchId);
+//     if (!match) return res.status(404).json({ message: "Match not found" });
+
+//     if (match.status !== "LIVE") {
+//       return res.status(400).json({ message: "Match is not live" });
+//     }
+
+//     if (match.createdBy.toString() !== req.user.id) {
+//       return res
+//         .status(403)
+//         .json({ message: "Only match creator can update events" });
+//     }
+
+//     const isHome = match.homeTeam.toString() === teamId;
+//     const isAway = match.awayTeam.toString() === teamId;
+
+//     if (!isHome && !isAway) {
+//       return res.status(400).json({ message: "Invalid team" });
+//     }
+
+//     const lineup = isHome ? match.lineups?.home : match.lineups?.away;
+
+//     if (!lineup) {
+//       return res.status(400).json({ message: "Lineup not found for team" });
+//     }
+
+//     // ================= LINEUP VALIDATION =================
+
+//     if (goal?.scorer && !isPlayerInStartingXI(lineup, goal.scorer)) {
+//       return res.status(400).json({
+//         message: "Goal scorer is not in starting lineup",
+//       });
+//     }
+
+//     if (card?.player && !isPlayerInStartingXI(lineup, card.player)) {
+//       return res.status(400).json({
+//         message: "Carded player is not in starting lineup",
+//       });
+//     }
+
+//     if (substitution?.out && substitution?.in) {
+//       if (!isPlayerInStartingXI(lineup, substitution.out)) {
+//         return res.status(400).json({
+//           message: "Substitution out player not in starting XI",
+//         });
+//       }
+
+//       if (!isPlayerInBench(lineup, substitution.in)) {
+//         return res.status(400).json({
+//           message: "Substitution in player not on bench",
+//         });
+//       }
+//     }
+
+//     // ================= EVENT CREATION =================
+
+//     const eventsToPush = [];
+
+//     if (goal?.scorer) {
+//       if (goal.type === "OWN") {
+//         if (isHome) match.score.away += 1;
+//         if (isAway) match.score.home += 1;
+
+//         eventsToPush.push({
+//           type: "OWN_GOAL",
+//           team: teamId,
+//           player: goal.scorer,
+//           minute,
+//         });
+//       } else if (goal.type === "PENALTY") {
+//         if (isHome) match.score.home += 1;
+//         if (isAway) match.score.away += 1;
+
+//         eventsToPush.push({
+//           type: "PENALTY_GOAL",
+//           team: teamId,
+//           player: goal.scorer,
+//           minute,
+//         });
+//       } else {
+//         if (isHome) match.score.home += 1;
+//         if (isAway) match.score.away += 1;
+
+//         eventsToPush.push({
+//           type: "GOAL",
+//           team: teamId,
+//           player: goal.scorer,
+//           assistPlayer: goal.assist || null,
+//           minute,
+//         });
+//       }
+//     }
+
+//     if (substitution?.out && substitution?.in) {
+//       eventsToPush.push({
+//         type: "SUBSTITUTION",
+//         team: teamId,
+//         player: substitution.out,
+//         substitutedPlayer: substitution.in,
+//         minute,
+//       });
+//     }
+
+//     if (card?.type && card?.player) {
+//       eventsToPush.push({
+//         type: card.type,
+//         team: teamId,
+//         player: card.player,
+//         minute,
+//       });
+//     }
+
+//     if (eventsToPush.length === 0) {
+//       return res.status(400).json({ message: "No valid event data provided" });
+//     }
+
+//     match.events.push(...eventsToPush);
+//     await match.save();
+
+//     res.json({
+//       message: "Match events added successfully",
+//       score: match.score,
+//       addedEvents: eventsToPush.length,
+//     });
+//   } catch (err) {
+//     res.status(500).json({ message: err.message });
+//   }
+// };
+
+exports.addMatchEvent = async (req, res, next) => {
   try {
     const matchId = req.params.id;
     const { minute, teamId, goal, substitution, card } = req.body;
@@ -466,12 +608,48 @@ exports.addMatchEvent = async (req, res) => {
       return res.status(400).json({ message: "Match is not live" });
     }
 
-    if (match.createdBy.toString() !== req.user.id) {
-      return res
-        .status(403)
-        .json({ message: "Only match creator can update events" });
+    // ✅ Permission check based on match type
+    const isTournamentMatch = !!match.tournamentId;
+
+    if (isTournamentMatch) {
+      // Tournament match — only organiser who owns the tournament can update
+      if (req.user.role !== "organiser") {
+        return res.status(403).json({
+          message: "Only the tournament organiser can update events",
+        });
+      }
+
+      // Verify organiser owns this tournament
+      const Organiser = require("../models/Organiser");
+      const Tournament = require("../models/Tournament");
+
+      const organiser = await Organiser.findOne({ user: req.user.id });
+      if (!organiser) {
+        return res.status(403).json({ message: "Organiser profile not found" });
+      }
+
+      const tournament = await Tournament.findById(match.tournamentId)
+        .select("organiser")
+        .lean();
+
+      if (
+        !tournament ||
+        tournament.organiser.toString() !== organiser._id.toString()
+      ) {
+        return res.status(403).json({
+          message: "You do not own this tournament",
+        });
+      }
+    } else {
+      // Friendly/Practice match — only match creator can update
+      if (match.createdBy.toString() !== req.user.id) {
+        return res.status(403).json({
+          message: "Only match creator can update events",
+        });
+      }
     }
 
+    // ---- rest of your existing event logic stays exactly the same ----
     const isHome = match.homeTeam.toString() === teamId;
     const isAway = match.awayTeam.toString() === teamId;
 
@@ -479,42 +657,35 @@ exports.addMatchEvent = async (req, res) => {
       return res.status(400).json({ message: "Invalid team" });
     }
 
-    // ✅ NOW lineup can be resolved safely
     const lineup = isHome ? match.lineups?.home : match.lineups?.away;
-
     if (!lineup) {
       return res.status(400).json({ message: "Lineup not found for team" });
     }
 
-    // ================= LINEUP VALIDATION =================
-
     if (goal?.scorer && !isPlayerInStartingXI(lineup, goal.scorer)) {
-      return res.status(400).json({
-        message: "Goal scorer is not in starting lineup",
-      });
+      return res
+        .status(400)
+        .json({ message: "Goal scorer is not in starting lineup" });
     }
 
     if (card?.player && !isPlayerInStartingXI(lineup, card.player)) {
-      return res.status(400).json({
-        message: "Carded player is not in starting lineup",
-      });
+      return res
+        .status(400)
+        .json({ message: "Carded player is not in starting lineup" });
     }
 
     if (substitution?.out && substitution?.in) {
       if (!isPlayerInStartingXI(lineup, substitution.out)) {
-        return res.status(400).json({
-          message: "Substitution out player not in starting XI",
-        });
+        return res
+          .status(400)
+          .json({ message: "Substitution out player not in starting XI" });
       }
-
       if (!isPlayerInBench(lineup, substitution.in)) {
-        return res.status(400).json({
-          message: "Substitution in player not on bench",
-        });
+        return res
+          .status(400)
+          .json({ message: "Substitution in player not on bench" });
       }
     }
-
-    // ================= EVENT CREATION =================
 
     const eventsToPush = [];
 
@@ -522,7 +693,6 @@ exports.addMatchEvent = async (req, res) => {
       if (goal.type === "OWN") {
         if (isHome) match.score.away += 1;
         if (isAway) match.score.home += 1;
-
         eventsToPush.push({
           type: "OWN_GOAL",
           team: teamId,
@@ -532,7 +702,6 @@ exports.addMatchEvent = async (req, res) => {
       } else if (goal.type === "PENALTY") {
         if (isHome) match.score.home += 1;
         if (isAway) match.score.away += 1;
-
         eventsToPush.push({
           type: "PENALTY_GOAL",
           team: teamId,
@@ -542,7 +711,6 @@ exports.addMatchEvent = async (req, res) => {
       } else {
         if (isHome) match.score.home += 1;
         if (isAway) match.score.away += 1;
-
         eventsToPush.push({
           type: "GOAL",
           team: teamId,
@@ -585,52 +753,69 @@ exports.addMatchEvent = async (req, res) => {
       addedEvents: eventsToPush.length,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };
 
 // ================= Reset Match =================
-exports.resetMatch = async (req, res) => {
+exports.resetMatch = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
 
     const match = await Match.findById(id);
-
     if (!match) {
       return res.status(404).json({ message: "Match not found" });
     }
 
     if (match.status !== "LIVE") {
-      return res.status(400).json({
-        message: "Only LIVE matches can be reset",
-      });
-    }
-
-    // Authorization
-    const creatorId = match.createdBy.toString();
-
-    if (creatorId !== req.user.id) {
       return res
-        .status(403)
-        .json({ message: "Only match creator can update events" });
+        .status(400)
+        .json({ message: "Only LIVE matches can be reset" });
     }
 
-    const isCreator = creatorId === userId;
-    const isHomeAdmin = match.homeTeamAdmins?.includes(userId);
-    const isAwayAdmin = match.awayTeamAdmins?.includes(userId);
-    const isOrganiser = req.user.role === "organiser";
+    // ✅ Clean permission check — same pattern as addMatchEvent
+    const isTournamentMatch = !!match.tournamentId;
 
-    if (!isCreator && !isHomeAdmin && !isAwayAdmin && !isOrganiser) {
-      return res.status(403).json({ message: "Not authorized to reset match" });
+    if (isTournamentMatch) {
+      if (req.user.role !== "organiser") {
+        return res.status(403).json({
+          message: "Only the tournament organiser can reset this match",
+        });
+      }
+
+      const Organiser = require("../models/Organiser");
+      const Tournament = require("../models/Tournament");
+
+      const organiser = await Organiser.findOne({ user: req.user.id });
+      if (!organiser) {
+        return res.status(403).json({ message: "Organiser profile not found" });
+      }
+
+      const tournament = await Tournament.findById(match.tournamentId)
+        .select("organiser")
+        .lean();
+
+      if (
+        !tournament ||
+        tournament.organiser.toString() !== organiser._id.toString()
+      ) {
+        return res
+          .status(403)
+          .json({ message: "You do not own this tournament" });
+      }
+    } else {
+      // Friendly/Practice — only match creator can reset
+      if (match.createdBy.toString() !== req.user.id) {
+        return res
+          .status(403)
+          .json({ message: "Only match creator can reset this match" });
+      }
     }
 
-    // RESET LOGIC
+    // ✅ Clean reset — only fields that exist on schema
     match.score = { home: 0, away: 0 };
     match.events = [];
-    match.startedAt = new Date(); // reset timer reference
-    match.lastResetAt = new Date();
-    match.resetCount = (match.resetCount || 0) + 1;
+    match.startedAt = new Date();
 
     await match.save();
 
@@ -639,8 +824,7 @@ exports.resetMatch = async (req, res) => {
       match,
     });
   } catch (err) {
-    console.error("RESET MATCH ERROR:", err);
-    return res.status(500).json({ message: "Internal server error" });
+    next(err);
   }
 };
 
@@ -759,9 +943,6 @@ exports.resetMatch = async (req, res) => {
 // };
 
 exports.endMatch = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     const { matchId } = req.body;
 
@@ -769,200 +950,22 @@ exports.endMatch = async (req, res) => {
       return res.status(400).json({ message: "Match ID is required" });
     }
 
-    const match = await Match.findById(matchId).session(session);
-    if (!match) {
-      return res.status(404).json({ message: "Match not found" });
-    }
-
-    console.log("END MATCH DEBUG", {
-      matchId,
-      status: match.status,
-      homeLineup: !!match.lineups?.home,
-      awayLineup: !!match.lineups?.away,
-      homeStarting: match.lineups?.home?.starting?.length,
-      awayStarting: match.lineups?.away?.starting?.length,
-      eventsCount: match.events?.length,
-    });
-
+    // Permission check
+    const match = await Match.findById(matchId);
+    if (!match) return res.status(404).json({ message: "Match not found" });
     if (match.status !== "LIVE") {
       return res.status(400).json({ message: "Match is not live" });
     }
-
-    // Permission: only creator
     if (match.createdBy.toString() !== req.user.id) {
       return res.status(403).json({ message: "Not authorized to end match" });
     }
 
-    /* ----------------------------------------------------
-       TEAM SCORE & RESULT
-    ---------------------------------------------------- */
-    const homeGoals = match.score.home;
-    const awayGoals = match.score.away;
-
-    let winner = null;
-    if (homeGoals > awayGoals) winner = match.homeTeam;
-    if (awayGoals > homeGoals) winner = match.awayTeam;
-
-    /* ----------------------------------------------------
-       LOAD TEAMS
-    ---------------------------------------------------- */
-    const homeTeam = await Team.findById(match.homeTeam).session(session);
-    const awayTeam = await Team.findById(match.awayTeam).session(session);
-
-    if (!homeTeam || !awayTeam) {
-      throw new Error("Teams not found");
-    }
-
-    /* ----------------------------------------------------
-       TEAM STATS UPDATE
-    ---------------------------------------------------- */
-    homeTeam.matchesPlayed += 1;
-    awayTeam.matchesPlayed += 1;
-
-    homeTeam.goalsScored += homeGoals;
-    homeTeam.goalsConceded += awayGoals;
-
-    awayTeam.goalsScored += awayGoals;
-    awayTeam.goalsConceded += homeGoals;
-
-    if (homeGoals > awayGoals) {
-      homeTeam.wins += 1;
-      awayTeam.losses += 1;
-    } else if (awayGoals > homeGoals) {
-      awayTeam.wins += 1;
-      homeTeam.losses += 1;
-    } else {
-      homeTeam.draws += 1;
-      awayTeam.draws += 1;
-    }
-
-    if (awayGoals === 0) homeTeam.cleanSheets += 1;
-    if (homeGoals === 0) awayTeam.cleanSheets += 1;
-
-    /* ----------------------------------------------------
-       PLAYER PARTICIPATION (matchesPlayed)
-    ---------------------------------------------------- */
-    const playedPlayers = new Set();
-
-    // Starting XI
-    match.lineups?.home?.starting?.forEach((p) => {
-      if (p?.player) {
-        playedPlayers.add(p.player.toString());
-      }
-    });
-
-    match.lineups?.away?.starting?.forEach((p) => {
-      if (p?.player) {
-        playedPlayers.add(p.player.toString());
-      }
-    });
-
-    // Substituted-in players
-    match.events
-      .filter((e) => e.type === "SUBSTITUTION" && e.substitution?.in)
-      .forEach((e) => {
-        playedPlayers.add(e.substitution.in.toString());
-      });
-
-    /* ----------------------------------------------------
-       PLAYER STATS FROM EVENTS
-    ---------------------------------------------------- */
-    const playerStatsMap = {};
-
-    const ensurePlayer = (id) => {
-      if (!playerStatsMap[id]) {
-        playerStatsMap[id] = {
-          goals: 0,
-          assists: 0,
-          yellowCards: 0,
-          redCards: 0,
-          cleanSheets: 0,
-        };
-      }
-    };
-
-    for (const event of match.events || []) {
-      // GOALS
-      if (event.goal?.scorer) {
-        ensurePlayer(event.goal.scorer.toString());
-        playerStatsMap[event.goal.scorer.toString()].goals += 1;
-      }
-
-      if (event.goal?.assist) {
-        ensurePlayer(event.goal.assist.toString());
-        playerStatsMap[event.goal.assist.toString()].assists += 1;
-      }
-
-      // CARDS
-      if (event.card?.player) {
-        ensurePlayer(event.card.player.toString());
-        if (event.card.type === "YELLOW") {
-          playerStatsMap[event.card.player.toString()].yellowCards += 1;
-        }
-        if (event.card.type === "RED") {
-          playerStatsMap[event.card.player.toString()].redCards += 1;
-        }
-      }
-    }
-
-    /* ----------------------------------------------------
-       GK CLEAN SHEET (GK ONLY)
-    ---------------------------------------------------- */
-    const applyGKCleanSheet = (lineup, conceded) => {
-      if (!lineup?.starting || conceded !== 0) return;
-
-      const gkSlot = lineup.starting.find(
-        (s) => s.slotKey === "GK" && s.player,
-      );
-
-      if (gkSlot?.player) {
-        ensurePlayer(gkSlot.player.toString());
-        playerStatsMap[gkSlot.player.toString()].cleanSheets += 1;
-      }
-    };
-
-    applyGKCleanSheet(match.lineups?.home, awayGoals);
-    applyGKCleanSheet(match.lineups?.away, homeGoals);
-
-    /* ----------------------------------------------------
-       UPDATE PLAYERS (BULK)
-    ---------------------------------------------------- */
-    for (const playerId of playedPlayers) {
-      const stats = playerStatsMap[playerId] || {};
-      await Player.findByIdAndUpdate(
-        playerId,
-        {
-          $inc: {
-            matchesPlayed: 1,
-            goals: stats.goals || 0,
-            assists: stats.assists || 0,
-            yellowCards: stats.yellowCards || 0,
-            redCards: stats.redCards || 0,
-            cleanSheets: stats.cleanSheets || 0,
-          },
-        },
-        { session },
-      );
-    }
-
-    /* ----------------------------------------------------
-       FINAL MATCH UPDATE
-    ---------------------------------------------------- */
-    match.status = "COMPLETED";
-    match.completedAt = new Date();
-    match.winner = winner;
-
-    await homeTeam.save({ session });
-    await awayTeam.save({ session });
-    await match.save({ session });
-
-    await session.commitTransaction();
-    session.endSession();
+    const result = await endMatchAndUpdateStats(matchId);
 
     res.json({
       message: "Match ended successfully",
-      score: match.score,
-      winner,
+      score: result.match.score,
+      winner: result.winner,
     });
   } catch (err) {
     await session.abortTransaction();

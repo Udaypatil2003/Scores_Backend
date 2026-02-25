@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/authMiddleware");
-
+const validateObjectId = require("../middleware/validateObjectId");
 
 const {
   createMatch,
@@ -15,7 +15,7 @@ const {
   addMatchEvent,
   getMatchLineups,
   getMatchSummary,
-  getMatchesByTournament
+  getMatchesByTournament,
 } = require("../controllers/matchController");
 
 // Team match flow
@@ -24,23 +24,21 @@ router.post("/respond", auth, respondToMatch);
 router.post("/cancel", auth, cancelMatch);
 
 router.post("/start", auth, startMatch);
-router.post("/:id/reset", auth, resetMatch);
-router.post("/:id/event", auth, addMatchEvent);
-router.get("/:id/lineups", auth, getMatchLineups);
-router.get("/:id/summary", auth, getMatchSummary);
+router.post("/:id/reset", auth, validateObjectId("id"), resetMatch);
+router.post("/:id/event", auth, validateObjectId("id"), addMatchEvent);
+router.get("/:id/lineups", auth, validateObjectId("id"), getMatchLineups);
+router.get("/:id/summary", auth, validateObjectId("id"), getMatchSummary);
 
 router.get(
   "/byTournament/:id",
   auth,
-  getMatchesByTournament
+  validateObjectId("id"),
+  getMatchesByTournament,
 );
-
-
-
 
 router.post("/end", auth, endMatch);
 
 router.get("/myMatch", auth, getMyMatches);
-router.get("/:id", auth, getMatchById);
+router.get("/:id", auth, validateObjectId("id"), getMatchById);
 
 module.exports = router;

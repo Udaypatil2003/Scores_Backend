@@ -94,6 +94,11 @@ const matchSchema = new mongoose.Schema(
     venue: { type: String, default: "" },
 
     scheduledAt: { type: Date, required: true },
+     notes: {
+      type: String,
+      default: "",
+      maxlength: 1000,
+    },
 
   status: {
   type: String,

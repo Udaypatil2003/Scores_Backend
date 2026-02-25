@@ -1,6 +1,7 @@
 const Player = require("../models/Player");
 const cloudinary = require("../config/cloudinary");
 const streamifier = require("streamifier");
+const { paginate, paginateResponse } = require("../utils/paginate");
 
 const User = require("../models/User");
 
@@ -125,21 +126,27 @@ exports.createProfile = async (req, res) => {
 
 
 // ================= SEARCH PLAYERS =================
-exports.searchPlayers = async (req, res) => {
+exports.searchPlayers = async (req, res, next) => {
   try {
     const { name, position } = req.query;
+    const { page, limit, skip } = paginate(req.query);
 
-    const query = { isFreeAgent: true };
+    const filter = {};
+    if (name) filter.name = new RegExp(name.trim(), "i");
+    if (position) filter.position = position;
 
-    if (name) query.name = new RegExp(name, "i");
-    if (position) query.position = position;
+    const [players, total] = await Promise.all([
+      Player.find(filter)
+        .select("name profileImageUrl position jerseyNumber age footed isFreeAgent teamId")
+        .skip(skip)
+        .limit(limit),
+      Player.countDocuments(filter),
+    ]);
 
-    const players = await Player.find(query);
+    res.json(paginateResponse(players, total, page, limit));
 
-    res.json(players);
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  } catch (err) {
+    next(err);
   }
 };
 
