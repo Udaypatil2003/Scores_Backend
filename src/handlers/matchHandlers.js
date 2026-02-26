@@ -498,7 +498,7 @@ module.exports = (io, socket) => {
         {
           score: { home: 0, away: 0 },
           events: [], // ✅ Explicitly empty array
-          startedAt: new Date(),
+          startedAt: null,
           status: "LIVE",
         },
         { new: true },
@@ -513,7 +513,7 @@ module.exports = (io, socket) => {
         matchId: updatedMatch._id,
         score: updatedMatch.score, // Should be {home: 0, away: 0}
         events: updatedMatch.events || [], // Should be []
-        startedAt: updatedMatch.startedAt,
+        startedAt: null,
         status: updatedMatch.status,
         homeTeam: updatedMatch.homeTeam,
         awayTeam: updatedMatch.awayTeam,

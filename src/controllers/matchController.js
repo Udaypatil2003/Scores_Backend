@@ -375,11 +375,11 @@ exports.startMatch = async (req, res) => {
     }
 
     // ==================== STATUS VALIDATION ====================
-    if (match.status !== "ACCEPTED") {
-      return res.status(400).json({
-        message: `Match cannot be started. Current status: ${match.status}`,
-      });
-    }
+   if (!["ACCEPTED", "LIVE"].includes(match.status)) {
+  return res.status(400).json({
+    message: `Match cannot be started. Current status: ${match.status}`,
+  });
+}
 
     // ==================== PERMISSION LOGIC ====================
     const isTournamentMatch = !!match.tournamentId;

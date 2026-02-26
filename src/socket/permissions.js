@@ -202,13 +202,13 @@ const canStartMatch = async (
     }
 
     // Match must be ACCEPTED to be started
-    if (match.status !== "ACCEPTED") {
-      return {
-        allowed: false,
-        reason: "Match must be accepted before starting",
-        match,
-      };
-    }
+   if (!["ACCEPTED", "LIVE"].includes(match.status)) {
+  return {
+    allowed: false,
+    reason: "Match cannot be started from current status",
+    match,
+  };
+}
 
     // Apply same ownership rules
     if (userRole === "player") {

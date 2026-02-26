@@ -39,7 +39,7 @@ exports.submitLineup = async (req, res) => {
     const isTournamentMatch = !!match.tournamentId;
 
 if (
-  !["ACCEPTED", "LIVE"].includes(match.status) &&
+  !["ACCEPTED", "LIVE","PENDING"].includes(match.status) &&
   !isTournamentMatch
 ) {
   return res.status(400).json({
