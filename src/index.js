@@ -43,6 +43,9 @@ app.use("/api/matchlineup", matchLineupRoutes);
 const organiserRoutes = require("./routes/organiserRoutes");
 app.use("/api/organiser", organiserRoutes);
 
+const statsRoutes = require("./routes/statsRoutes");
+app.use("/api", statsRoutes);
+
 app.get("/healthstatus", (req, res) => {
   res.json({ status: "ok", message: "Server is running" });
 });
