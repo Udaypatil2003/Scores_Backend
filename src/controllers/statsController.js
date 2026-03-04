@@ -305,6 +305,10 @@ exports.getTeamStats = async (req, res) => {
       .populate("awayTeam", "teamName teamLogoUrl _id")
       .populate("events.player", "name _id")
       .populate("events.assistPlayer", "name _id")
+      .populate("lineups.home.starting.player", "name _id")  // ✅ populate lineup names
+      .populate("lineups.away.starting.player", "name _id")  // ✅
+      .populate("lineups.home.bench", "name _id")            // ✅
+      .populate("lineups.away.bench", "name _id")            // ✅
       .sort({ scheduledAt: 1 })
       .lean();
 
@@ -398,8 +402,17 @@ exports.getTeamStats = async (req, res) => {
       }
     }
 
+    // ✅ Build name lookup from team.players roster (most reliable source)
+    const nameLookup = new Map(
+      team.players.map((p) => [p._id.toString(), p.name])
+    );
+
     const players = Array.from(playerStatsMap.values())
-      .map((p) => ({ ...p, matchesPlayed: p.matchIds.size }))
+      .map((p) => ({
+        ...p,
+        playerName: nameLookup.get(p.playerId) || p.playerName || "Unknown", // ✅ enrich from roster
+        matchesPlayed: p.matchIds.size,
+      }))
       .sort((a, b) => b.goals - a.goals || b.assists - a.assists);
 
     // ── Standings position (if tournamentId) ──
@@ -535,14 +548,13 @@ exports.getPlayerStats = async (req, res) => {
         assists: matchAssists,
         yellowCard,
         redCard,
-        minutesPlayed: 90, // No minute tracking per player yet — default 90
+        minutesPlayed: 90,
       });
     }
 
     // ── Rankings (if tournamentId) ──
     let rankings = {};
     if (tournamentId) {
-      // Get all players' stats in this tournament to rank
       const tourneyMatches = await Match.find({ tournamentId, status: "COMPLETED" })
         .populate("events.player", "_id")
         .populate("events.assistPlayer", "_id")
@@ -578,7 +590,7 @@ exports.getPlayerStats = async (req, res) => {
         yellowCards: totalYellowCards,
         redCards: totalRedCards,
         matchesPlayed,
-        minutesPlayed: matchesPlayed * 90, // approximate until you add per-player minutes
+        minutesPlayed: matchesPlayed * 90,
       },
       rankings,
       matchLog,
