@@ -49,9 +49,8 @@ const matchEventSchema = new mongoose.Schema(
       max: 130, // extra time support
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
-
 
 const matchSchema = new mongoose.Schema(
   {
@@ -94,17 +93,25 @@ const matchSchema = new mongoose.Schema(
     venue: { type: String, default: "" },
 
     scheduledAt: { type: Date, required: true },
-     notes: {
+    notes: {
       type: String,
       default: "",
       maxlength: 1000,
     },
 
-  status: {
-  type: String,
-  enum: ["PENDING", "ACCEPTED", "LIVE", "PAUSED", "COMPLETED", "CANCELLED",    "REJECTED", ],
-  default: "PENDING",
-},
+    status: {
+      type: String,
+      enum: [
+        "PENDING",
+        "ACCEPTED",
+        "LIVE",
+        "PAUSED",
+        "COMPLETED",
+        "CANCELLED",
+        "REJECTED",
+      ],
+      default: "PENDING",
+    },
 
     approval: {
       approvedBy: {
@@ -132,66 +139,68 @@ const matchSchema = new mongoose.Schema(
 
     events: [matchEventSchema],
     lineups: {
-  home: {
-    formation: { type: String },
-    starting: [
-      {
-        slotKey: String,
-        player: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Player",
-        },
+      home: {
+        formation: { type: String },
+        starting: [
+          {
+            slotKey: String,
+            player: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: "Player",
+            },
+          },
+        ],
+        bench: [
+          {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Player",
+          },
+        ],
+        submittedAt: { type: Date },
       },
-    ],
-    bench: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Player",
+
+      away: {
+        formation: { type: String },
+        starting: [
+          {
+            slotKey: String,
+            player: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: "Player",
+            },
+          },
+        ],
+        bench: [
+          {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Player",
+          },
+        ],
+        submittedAt: { type: Date },
       },
-    ],
-    submittedAt: { type: Date },
+    },
+    tournamentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Tournament",
+      default: null,
+      index: true,
+    },
+
+    round: {
+      type: Number,
+      default: null,
+    },
+    tournamentContext: {
+      isTournamentMatch: { type: Boolean, default: false },
+      tournamentRound: { type: Number },
+    },
+    acceptance: {
+  home: { type: Boolean, default: false },
+  away: { type: Boolean, default: false },
+},
   },
 
-  away: {
-    formation: { type: String },
-    starting: [
-      {
-        slotKey: String,
-        player: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Player",
-        },
-      },
-    ],
-    bench: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Player",
-      },
-    ],
-    submittedAt: { type: Date },
-  },
-},
-tournamentId: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "Tournament",
-  default: null,
-  index: true,
-},
-
-round: {
-  type: Number,
-  default: null,
-},
-tournamentContext: {
-  isTournamentMatch: { type: Boolean, default: false },
-  tournamentRound: { type: Number },
-},
-
-
-  },
-  
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("Match", matchSchema);

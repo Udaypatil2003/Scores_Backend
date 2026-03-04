@@ -3,7 +3,7 @@ const Team = require("../models/Team");
 const mongoose = require("mongoose");
 const Player = require("../models/Player");
 const { endMatchAndUpdateStats } = require("../services/matchService");
-const {paginate, paginateResponse} = require("../utils/paginate");
+const { paginate, paginateResponse } = require("../utils/paginate");
 
 const isPlayerInStartingXI = (lineup, playerId) =>
   lineup.starting.some((s) => s.player && s.player.toString() === playerId);
@@ -191,39 +191,27 @@ exports.respondToMatch = async (req, res) => {
 
   // ✅ ACTION
   if (action === "ACCEPT") {
-    if (!myTeam.savedLineup) {
-      return res.status(400).json({
-        message: "Please save lineup before accepting match",
-      });
-    }
-
-    const hasStartingPlayers =
-      Array.isArray(myTeam.savedLineup.starting) &&
-      myTeam.savedLineup.starting.length > 0;
-
-    if (!hasStartingPlayers) {
-      return res.status(400).json({
-        message: "Please select at least one starting player",
-      });
+    if (
+      !myTeam.savedLineup ||
+      !Array.isArray(myTeam.savedLineup.starting) ||
+      myTeam.savedLineup.starting.length === 0
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Please save lineup before accepting match" });
     }
 
     let side = null;
-
-    if (match.homeTeam._id.toString() === myTeam._id.toString()) {
-      side = "home";
-    }
-
-    if (match.awayTeam._id.toString() === myTeam._id.toString()) {
-      side = "away";
-    }
+    if (match.homeTeam._id.toString() === myTeam._id.toString()) side = "home";
+    if (match.awayTeam._id.toString() === myTeam._id.toString()) side = "away";
 
     if (!side) {
-      return res.status(403).json({
-        message: "You are not a participant in this match",
-      });
+      return res
+        .status(403)
+        .json({ message: "You are not a participant in this match" });
     }
 
-    // ✅ Save ONLY opponent lineup
+    // ✅ Save lineup for this team
     match.lineups[side] = {
       formation: myTeam.savedLineup.formation,
       starting: myTeam.savedLineup.starting,
@@ -233,7 +221,21 @@ exports.respondToMatch = async (req, res) => {
       submittedAt: new Date(),
     };
 
-    match.status = "ACCEPTED";
+    // ✅ Mark this team as accepted
+    if (!match.acceptance) match.acceptance = { home: false, away: false };
+    match.acceptance[side] = true;
+
+    // ✅ Tournament match — both teams must accept
+    if (match.createdByRole === "organiser") {
+      const bothAccepted = match.acceptance.home && match.acceptance.away;
+      if (bothAccepted) {
+        match.status = "ACCEPTED";
+      }
+      // else stay PENDING so second team can still accept
+    } else {
+      // ✅ Friendly match — one team accepts = ACCEPTED
+      match.status = "ACCEPTED";
+    }
   } else if (action === "REJECT") {
     match.status = "REJECTED";
     match.rejectionReason = reason;
@@ -275,7 +277,6 @@ exports.getMyMatches = async (req, res, next) => {
       ]);
 
       return res.json(paginateResponse(matches, total, page, limit));
-
     } else if (req.user.role === "player") {
       const player = await Player.findOne({ userId: req.user.id });
       if (!player) {
@@ -305,7 +306,6 @@ exports.getMyMatches = async (req, res, next) => {
     }
 
     return res.status(403).json({ message: "Access denied" });
-
   } catch (err) {
     next(err);
   }
@@ -375,11 +375,11 @@ exports.startMatch = async (req, res) => {
     }
 
     // ==================== STATUS VALIDATION ====================
-   if (!["ACCEPTED", "LIVE"].includes(match.status)) {
-  return res.status(400).json({
-    message: `Match cannot be started. Current status: ${match.status}`,
-  });
-}
+    if (!["ACCEPTED", "LIVE"].includes(match.status)) {
+      return res.status(400).json({
+        message: `Match cannot be started. Current status: ${match.status}`,
+      });
+    }
 
     // ==================== PERMISSION LOGIC ====================
     const isTournamentMatch = !!match.tournamentId;
@@ -448,147 +448,6 @@ exports.startMatch = async (req, res) => {
     return res.status(500).json({ message: "Failed to start match" });
   }
 };
-
-// =================  match event =================
-// exports.addMatchEvent = async (req, res) => {
-//   try {
-//     const matchId = req.params.id;
-//     const { minute, teamId, goal, substitution, card } = req.body;
-
-//     if (minute === undefined || minute === null || !teamId) {
-//       return res
-//         .status(400)
-//         .json({ message: "Minute and teamId are required" });
-//     }
-
-//     const match = await Match.findById(matchId);
-//     if (!match) return res.status(404).json({ message: "Match not found" });
-
-//     if (match.status !== "LIVE") {
-//       return res.status(400).json({ message: "Match is not live" });
-//     }
-
-//     if (match.createdBy.toString() !== req.user.id) {
-//       return res
-//         .status(403)
-//         .json({ message: "Only match creator can update events" });
-//     }
-
-//     const isHome = match.homeTeam.toString() === teamId;
-//     const isAway = match.awayTeam.toString() === teamId;
-
-//     if (!isHome && !isAway) {
-//       return res.status(400).json({ message: "Invalid team" });
-//     }
-
-//     const lineup = isHome ? match.lineups?.home : match.lineups?.away;
-
-//     if (!lineup) {
-//       return res.status(400).json({ message: "Lineup not found for team" });
-//     }
-
-//     // ================= LINEUP VALIDATION =================
-
-//     if (goal?.scorer && !isPlayerInStartingXI(lineup, goal.scorer)) {
-//       return res.status(400).json({
-//         message: "Goal scorer is not in starting lineup",
-//       });
-//     }
-
-//     if (card?.player && !isPlayerInStartingXI(lineup, card.player)) {
-//       return res.status(400).json({
-//         message: "Carded player is not in starting lineup",
-//       });
-//     }
-
-//     if (substitution?.out && substitution?.in) {
-//       if (!isPlayerInStartingXI(lineup, substitution.out)) {
-//         return res.status(400).json({
-//           message: "Substitution out player not in starting XI",
-//         });
-//       }
-
-//       if (!isPlayerInBench(lineup, substitution.in)) {
-//         return res.status(400).json({
-//           message: "Substitution in player not on bench",
-//         });
-//       }
-//     }
-
-//     // ================= EVENT CREATION =================
-
-//     const eventsToPush = [];
-
-//     if (goal?.scorer) {
-//       if (goal.type === "OWN") {
-//         if (isHome) match.score.away += 1;
-//         if (isAway) match.score.home += 1;
-
-//         eventsToPush.push({
-//           type: "OWN_GOAL",
-//           team: teamId,
-//           player: goal.scorer,
-//           minute,
-//         });
-//       } else if (goal.type === "PENALTY") {
-//         if (isHome) match.score.home += 1;
-//         if (isAway) match.score.away += 1;
-
-//         eventsToPush.push({
-//           type: "PENALTY_GOAL",
-//           team: teamId,
-//           player: goal.scorer,
-//           minute,
-//         });
-//       } else {
-//         if (isHome) match.score.home += 1;
-//         if (isAway) match.score.away += 1;
-
-//         eventsToPush.push({
-//           type: "GOAL",
-//           team: teamId,
-//           player: goal.scorer,
-//           assistPlayer: goal.assist || null,
-//           minute,
-//         });
-//       }
-//     }
-
-//     if (substitution?.out && substitution?.in) {
-//       eventsToPush.push({
-//         type: "SUBSTITUTION",
-//         team: teamId,
-//         player: substitution.out,
-//         substitutedPlayer: substitution.in,
-//         minute,
-//       });
-//     }
-
-//     if (card?.type && card?.player) {
-//       eventsToPush.push({
-//         type: card.type,
-//         team: teamId,
-//         player: card.player,
-//         minute,
-//       });
-//     }
-
-//     if (eventsToPush.length === 0) {
-//       return res.status(400).json({ message: "No valid event data provided" });
-//     }
-
-//     match.events.push(...eventsToPush);
-//     await match.save();
-
-//     res.json({
-//       message: "Match events added successfully",
-//       score: match.score,
-//       addedEvents: eventsToPush.length,
-//     });
-//   } catch (err) {
-//     res.status(500).json({ message: err.message });
-//   }
-// };
 
 exports.addMatchEvent = async (req, res, next) => {
   try {
@@ -829,118 +688,6 @@ exports.resetMatch = async (req, res, next) => {
 };
 
 // ================= End Match =================
-
-// exports.endMatch = async (req, res) => {
-//   const session = await mongoose.startSession();
-//   session.startTransaction();
-
-//   try {
-//     const { matchId } = req.body;
-
-//     const match = await Match.findById(matchId).session(session);
-//     if (!match) throw new Error("Match not found");
-
-//     if (match.status !== "LIVE") {
-//       throw new Error("Only live matches can be ended");
-//     }
-
-//     if (match.createdBy.toString() !== req.user.id) {
-//       throw new Error("Only creator can end match");
-//     }
-
-//     // -------- PLAYER STATS --------
-//     const goalEvents = match.events.filter((e) => e.type === "GOAL");
-//     const playerStats = {};
-
-//     goalEvents.forEach((e) => {
-//       if (e.player) {
-//         playerStats[e.player] = playerStats[e.player] || {
-//           goals: 0,
-//           assists: 0,
-//         };
-//         playerStats[e.player].goals += 1;
-//       }
-//       if (e.assistPlayer) {
-//         playerStats[e.assistPlayer] = playerStats[e.assistPlayer] || {
-//           goals: 0,
-//           assists: 0,
-//         };
-//         playerStats[e.assistPlayer].assists += 1;
-//       }
-//     });
-
-//     for (const playerId in playerStats) {
-//       await Player.findByIdAndUpdate(
-//         playerId,
-//         {
-//           $inc: {
-//             goals: playerStats[playerId].goals,
-//             assists: playerStats[playerId].assists,
-//             matchesPlayed: 1,
-//           },
-//         },
-//         { session }
-//       );
-//     }
-
-//     // -------- TEAM STATS --------
-//     const homeGoals = match.score.home;
-//     const awayGoals = match.score.away;
-
-//     const homeUpdate = {
-//       matchesPlayed: 1,
-//       goalsScored: homeGoals,
-//       goalsConceded: awayGoals,
-//     };
-
-//     const awayUpdate = {
-//       matchesPlayed: 1,
-//       goalsScored: awayGoals,
-//       goalsConceded: homeGoals,
-//     };
-
-//     if (homeGoals > awayGoals) {
-//       homeUpdate.wins = 1;
-//       awayUpdate.losses = 1;
-//       match.winner = match.homeTeam;
-//     } else if (awayGoals > homeGoals) {
-//       awayUpdate.wins = 1;
-//       homeUpdate.losses = 1;
-//       match.winner = match.awayTeam;
-//     } else {
-//       homeUpdate.draws = 1;
-//       awayUpdate.draws = 1;
-//     }
-
-//     if (awayGoals === 0) homeUpdate.cleanSheets = 1;
-//     if (homeGoals === 0) awayUpdate.cleanSheets = 1;
-
-//     await Team.findByIdAndUpdate(
-//       match.homeTeam,
-//       { $inc: homeUpdate },
-//       { session }
-//     );
-//     await Team.findByIdAndUpdate(
-//       match.awayTeam,
-//       { $inc: awayUpdate },
-//       { session }
-//     );
-
-//     match.status = "COMPLETED";
-//     match.completedAt = new Date();
-
-//     await match.save({ session });
-
-//     await session.commitTransaction();
-//     session.endSession();
-
-//     res.json({ message: "Match completed successfully" });
-//   } catch (err) {
-//     await session.abortTransaction();
-//     session.endSession();
-//     res.status(500).json({ message: err.message });
-//   }
-// };
 
 exports.endMatch = async (req, res) => {
   try {
