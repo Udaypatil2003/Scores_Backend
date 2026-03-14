@@ -290,6 +290,8 @@ const Player = require("../models/Player");
 const { uploadImage } = require("../utils/uploadImage");
 const Tournament = require("../models/Tournament");
 const Match = require("../models/Match");
+const { sendNotificationToUser } = require('../utils/firebaseAdmin');
+
 
 // ---------------- Create TEAM ----------------
 exports.createTeam = async (req, res) => {
@@ -466,9 +468,7 @@ exports.addPlayer = async (req, res, next) => {
   try {
     const team = await Team.findOne({ admins: req.user.id });
     if (!team) {
-      return res
-        .status(404)
-        .json({ message: "Team not found or access denied" });
+      return res.status(404).json({ message: "Team not found or access denied" });
     }
 
     const { playerId } = req.body;
@@ -476,34 +476,20 @@ exports.addPlayer = async (req, res, next) => {
       return res.status(400).json({ message: "Player ID is required" });
     }
 
-    // Check if player already in team
     if (team.players.some((p) => p.toString() === playerId)) {
       return res.status(400).json({ message: "Player already in team" });
     }
 
-    // ✅ Atomic update — only succeeds if player is still a free agent
-    // If two requests hit simultaneously, only ONE will find isFreeAgent: true
     const player = await Player.findOneAndUpdate(
-      {
-        _id: playerId,
-        isFreeAgent: true, // ← condition must be true to update
-      },
-      {
-        $set: {
-          teamId: team._id,
-          isFreeAgent: false,
-        },
-      },
-      { new: true },
+      { _id: playerId, isFreeAgent: true },
+      { $set: { teamId: team._id, isFreeAgent: false } },
+      { new: true }
     );
 
-    // If null — player either doesn't exist or was already taken
     if (!player) {
       const exists = await Player.exists({ _id: playerId });
       return res.status(400).json({
-        message: exists
-          ? "Player is already part of another team"
-          : "Player not found",
+        message: exists ? "Player is already part of another team" : "Player not found",
       });
     }
 
@@ -512,36 +498,35 @@ exports.addPlayer = async (req, res, next) => {
 
     await team.populate({
       path: "players",
-      select:
-        "name profileImageUrl position jerseyNumber age footed isFreeAgent",
+      select: "name profileImageUrl position jerseyNumber age footed isFreeAgent",
     });
 
-    res.json({
-      message: "Player added successfully",
-      team,
-    });
+    // ✅ Notify the player they were added
+    await sendNotificationToUser(
+      player.userId,           // player's userId
+      '⚽ Added to Team!',
+      `You have been added to ${team.teamName}`,
+      { type: 'ADDED_TO_TEAM', teamId: team._id.toString() }
+    );
+
+    res.json({ message: "Player added successfully", team });
   } catch (err) {
     next(err);
   }
 };
-
 // ---------------- REMOVE PLAYER ----------------
 exports.removePlayer = async (req, res) => {
   try {
     const team = await Team.findOne({ admins: req.user.id });
     if (!team) {
-      return res
-        .status(404)
-        .json({ message: "Team not found or access denied" });
+      return res.status(404).json({ message: "Team not found or access denied" });
     }
 
     const { playerId } = req.body;
-
     if (!playerId) {
       return res.status(400).json({ message: "Player ID is required" });
     }
 
-    // Check if player is in team
     if (!team.players.some((p) => p.toString() === playerId)) {
       return res.status(400).json({ message: "Player not in team" });
     }
@@ -559,19 +544,23 @@ exports.removePlayer = async (req, res) => {
 
     await team.populate({
       path: "players",
-      select:
-        "name profileImageUrl position jerseyNumber age footed isFreeAgent",
+      select: "name profileImageUrl position jerseyNumber age footed isFreeAgent",
     });
 
-    res.json({
-      message: "Player removed successfully",
-      team,
-    });
+    // ✅ Notify the player they were removed
+    if (player) {
+      await sendNotificationToUser(
+        player.userId,
+        '❌ Removed from Team',
+        `You have been removed from ${team.teamName}`,
+        { type: 'REMOVED_FROM_TEAM', teamId: team._id.toString() }
+      );
+    }
+
+    res.json({ message: "Player removed successfully", team });
   } catch (err) {
     console.error("Remove player error:", err);
-    res.status(500).json({
-      message: err.message || "Failed to remove player",
-    });
+    res.status(500).json({ message: err.message || "Failed to remove player" });
   }
 };
 

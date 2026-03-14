@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const Player = require("../models/Player");
 const { endMatchAndUpdateStats } = require("../services/matchService");
 const { paginate, paginateResponse } = require("../utils/paginate");
+const { sendNotificationToUser } = require("../utils/firebaseAdmin");
 
 const isPlayerInStartingXI = (lineup, playerId) =>
   lineup.starting.some((s) => s.player && s.player.toString() === playerId);
@@ -52,31 +53,17 @@ exports.cancelMatch = async (req, res) => {
 exports.createMatch = async (req, res) => {
   try {
     if (req.user.role !== "team") {
-      return res
-        .status(403)
-        .json({ message: "Only team owners can create matches" });
+      return res.status(403).json({ message: "Only team owners can create matches" });
     }
 
-    const {
-      opponentTeamId,
-      scheduledAt,
-      venue,
-      format,
-      matchType,
-      homeOrAway,
-      notes, // ── NEW
-    } = req.body;
+    const { opponentTeamId, scheduledAt, venue, format, matchType, homeOrAway, notes } = req.body;
 
     if (!opponentTeamId || !scheduledAt || !homeOrAway) {
-      return res.status(400).json({
-        message: "Opponent team, date, and home/away selection are required",
-      });
+      return res.status(400).json({ message: "Opponent team, date, and home/away selection are required" });
     }
 
     if (!["HOME", "AWAY"].includes(homeOrAway)) {
-      return res
-        .status(400)
-        .json({ message: "homeOrAway must be HOME or AWAY" });
+      return res.status(400).json({ message: "homeOrAway must be HOME or AWAY" });
     }
 
     const myTeam = await Team.findOne({ createdBy: req.user.id });
@@ -90,32 +77,25 @@ exports.createMatch = async (req, res) => {
     }
 
     if (myTeam._id.equals(opponentTeam._id)) {
-      return res
-        .status(400)
-        .json({ message: "You cannot challenge your own team" });
+      return res.status(400).json({ message: "You cannot challenge your own team" });
     }
 
     const homeTeam = homeOrAway === "HOME" ? myTeam._id : opponentTeam._id;
     const awayTeam = homeOrAway === "HOME" ? opponentTeam._id : myTeam._id;
 
     if (!myTeam.savedLineup) {
-      return res.status(400).json({
-        message: "Please save lineup before creating match",
-      });
+      return res.status(400).json({ message: "Please save lineup before creating match" });
     }
 
     const lineups = {};
     lineups[homeOrAway === "HOME" ? "home" : "away"] = {
       formation: myTeam.savedLineup.formation,
-      starting: Array.isArray(myTeam.savedLineup.starting)
-        ? myTeam.savedLineup.starting
-        : [],
-      bench: Array.isArray(myTeam.savedLineup.bench)
-        ? myTeam.savedLineup.bench
-        : [],
+      starting: Array.isArray(myTeam.savedLineup.starting) ? myTeam.savedLineup.starting : [],
+      bench: Array.isArray(myTeam.savedLineup.bench) ? myTeam.savedLineup.bench : [],
       submittedAt: new Date(),
     };
 
+    // ✅ CREATE MATCH FIRST
     const match = await Match.create({
       createdBy: req.user.id,
       createdByRole: "team",
@@ -125,15 +105,30 @@ exports.createMatch = async (req, res) => {
       venue,
       format,
       matchType,
-      notes: notes || "", // ── NEW
+      notes: notes || "",
       status: "PENDING",
       lineups,
     });
 
+    // ✅ THEN send notification
+    try {
+      const opponentAdmin = opponentTeam.admins[0];
+      await sendNotificationToUser(
+        opponentAdmin,
+        "⚽ New Match Challenge!",
+        `${myTeam.teamName} has challenged you to a ${matchType || "Friendly"} match!`,
+        { type: "MATCH_REQUEST", matchId: match._id.toString() }
+      );
+    } catch (notifErr) {
+      console.error("Notification error:", notifErr.message);
+    }
+
+    // ✅ ONE response at the end
     res.status(201).json({
       message: "Match request sent successfully",
       match,
     });
+
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -244,6 +239,33 @@ exports.respondToMatch = async (req, res) => {
   }
 
   await match.save();
+
+  // Get match creator's team to notify them
+  const creatorTeam = await Team.findOne({ createdBy: match.createdBy });
+
+  if (action === "ACCEPT") {
+    // Notify match creator their challenge was accepted
+    await sendNotificationToUser(
+      match.createdBy,
+      "✅ Match Accepted!",
+      `${myTeam.teamName} accepted your match challenge!`,
+      {
+        type: "MATCH_ACCEPTED",
+        matchId: match._id.toString(),
+      },
+    );
+  } else if (action === "REJECT") {
+    // Notify match creator their challenge was rejected
+    await sendNotificationToUser(
+      match.createdBy,
+      "❌ Match Rejected",
+      `${myTeam.teamName} rejected your match challenge`,
+      {
+        type: "MATCH_REJECTED",
+        matchId: match._id.toString(),
+      },
+    );
+  }
 
   res.json({
     message: `Match ${action.toLowerCase()}ed successfully`,
@@ -367,32 +389,27 @@ exports.startMatch = async (req, res) => {
     }
 
     const match = await Match.findById(matchId)
-      .populate("homeTeam", "teamName")
-      .populate("awayTeam", "teamName");
+      .populate("homeTeam", "teamName admins")  // 👈 add admins
+      .populate("awayTeam", "teamName admins");  // 👈 add admins
 
     if (!match) {
       return res.status(404).json({ message: "Match not found" });
     }
 
-    // ==================== STATUS VALIDATION ====================
     if (!["ACCEPTED", "LIVE"].includes(match.status)) {
       return res.status(400).json({
         message: `Match cannot be started. Current status: ${match.status}`,
       });
     }
 
-    // ==================== PERMISSION LOGIC ====================
     const isTournamentMatch = !!match.tournamentId;
     const isCreator = match.createdBy.toString() === req.user.id;
     const isOrganiser = req.user.role === "organiser";
 
     let canStart = false;
-
     if (isTournamentMatch) {
-      // Tournament matches: ONLY organiser can start
       canStart = isOrganiser;
     } else {
-      // Friendly/Practice: Only creator can start
       canStart = isCreator;
     }
 
@@ -404,34 +421,47 @@ exports.startMatch = async (req, res) => {
       });
     }
 
-    // ==================== LINEUP VALIDATION ====================
     const isValidLineup = (lineup) =>
       lineup &&
       lineup.formation &&
       Array.isArray(lineup.starting) &&
       lineup.starting.length > 0 &&
-      lineup.submittedAt; // ✅ MUST be submitted
+      lineup.submittedAt;
 
-    const homeLineup = match.lineups?.home;
-    const awayLineup = match.lineups?.away;
-
-    if (!isValidLineup(homeLineup)) {
+    if (!isValidLineup(match.lineups?.home)) {
       return res.status(400).json({
         message: `${match.homeTeam.teamName} has not submitted their lineup yet`,
       });
     }
 
-    if (!isValidLineup(awayLineup)) {
+    if (!isValidLineup(match.lineups?.away)) {
       return res.status(400).json({
         message: `${match.awayTeam.teamName} has not submitted their lineup yet`,
       });
     }
 
-    // ==================== START MATCH ====================
     match.status = "LIVE";
     match.startedAt = new Date();
-
     await match.save();
+
+    // ✅ Notify both team admins match has started
+    const matchInfo = `${match.homeTeam.teamName} vs ${match.awayTeam.teamName}`;
+    try {
+      await sendNotificationToUser(
+        match.homeTeam.admins[0],
+        "🟢 Match Started!",
+        `${matchInfo} is now LIVE!`,
+        { type: "MATCH_STARTED", matchId: match._id.toString() }
+      );
+      await sendNotificationToUser(
+        match.awayTeam.admins[0],
+        "🟢 Match Started!",
+        `${matchInfo} is now LIVE!`,
+        { type: "MATCH_STARTED", matchId: match._id.toString() }
+      );
+    } catch (notifErr) {
+      console.error("Start match notification error:", notifErr.message);
+    }
 
     return res.json({
       message: "Match started successfully",
@@ -697,7 +727,6 @@ exports.endMatch = async (req, res) => {
       return res.status(400).json({ message: "Match ID is required" });
     }
 
-    // Permission check
     const match = await Match.findById(matchId);
     if (!match) return res.status(404).json({ message: "Match not found" });
     if (match.status !== "LIVE") {
@@ -709,14 +738,41 @@ exports.endMatch = async (req, res) => {
 
     const result = await endMatchAndUpdateStats(matchId);
 
+    // ✅ Get full match with admins populated
+    const fullMatch = await Match.findById(matchId)
+      .populate("homeTeam", "teamName admins")  // 👈 add admins
+      .populate("awayTeam", "teamName admins");  // 👈 add admins
+
+    const homeScore = fullMatch.score.home;
+    const awayScore = fullMatch.score.away;
+    const resultText = `${fullMatch.homeTeam.teamName} ${homeScore} - ${awayScore} ${fullMatch.awayTeam.teamName}`;
+
+    // ✅ Wrapped in try/catch — won't crash if notification fails
+    try {
+      await sendNotificationToUser(
+        fullMatch.homeTeam.admins[0],
+        "🏁 Match Completed!",
+        `Final Result: ${resultText}`,
+        { type: "MATCH_RESULT", matchId: matchId.toString() }
+      );
+      await sendNotificationToUser(
+        fullMatch.awayTeam.admins[0],
+        "🏁 Match Completed!",
+        `Final Result: ${resultText}`,
+        { type: "MATCH_RESULT", matchId: matchId.toString() }
+      );
+    } catch (notifErr) {
+      console.error("End match notification error:", notifErr.message);
+    }
+
+    // ✅ Removed session.abortTransaction() — no session used here
     res.json({
       message: "Match ended successfully",
       score: result.match.score,
       winner: result.winner,
     });
   } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
+    console.error("END MATCH ERROR:", err.message);
     res.status(500).json({ message: err.message });
   }
 };

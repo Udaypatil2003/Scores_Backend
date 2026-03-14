@@ -18,6 +18,7 @@ const {
 } = require("../controllers/teamController");
 const { saveLineup, getLineup } = require("../controllers/teamLineupController")
 const validateObjectId = require("../middleware/validateObjectId");
+
 // Team user functions
 
 router.post("/create", auth, upload.fields([

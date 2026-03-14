@@ -43,7 +43,6 @@ const initializeSocket = (server) => {
 
       // Fetch user details
       const user = await User.findById(decoded.id).select("-password");
-      console.log("🧪 Socket JWT decoded payload:", decoded);
 
       if (!user) {
         return next(new Error("Authentication error: User not found"));
@@ -69,7 +68,6 @@ const initializeSocket = (server) => {
         }
       }
 
-      console.log(`✅ Socket authenticated: ${socket.id} | User: ${socket.userId} | Role: ${socket.userRole}`);
 
       next();
     } catch (error) {
@@ -80,7 +78,6 @@ const initializeSocket = (server) => {
 
   // Connection Handler
   io.on("connection", (socket) => {
-    console.log(`🔌 New socket connection: ${socket.id}`);
 
     // Register Match Handlers
     matchHandlers(io, socket);

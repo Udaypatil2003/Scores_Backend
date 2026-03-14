@@ -7,6 +7,10 @@ require("dotenv").config();
 const { initializeSocket } = require("./socket/socketServer");
 const { apiLimiter } = require("./middleware/rateLimiter"); 
 const errorHandler  = require("./middleware/errorHandler");
+const notificationRoutes = require("./routes/notificationRoutes");
+const { startMatchReminderJob } = require("./jobs/matchReminder");
+
+
 
 const app = express();
 
@@ -17,6 +21,9 @@ app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 
 // DB connect
 connectDB();
+
+startMatchReminderJob();
+
 
 // ✅ Apply general rate limiter to ALL api routes
 app.use("/api", apiLimiter);  // ← ADD THIS before routes
@@ -42,6 +49,9 @@ app.use("/api/matchlineup", matchLineupRoutes);
 
 const organiserRoutes = require("./routes/organiserRoutes");
 app.use("/api/organiser", organiserRoutes);
+
+app.use("/api/notifications", notificationRoutes);
+
 
 const statsRoutes = require("./routes/statsRoutes");
 app.use("/api", statsRoutes);
